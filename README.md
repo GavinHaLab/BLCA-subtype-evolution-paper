@@ -7,7 +7,7 @@
 
 ## 🔍 Summary
 
-This repository contains code, data, and results for analyzing clonal and genomic heterogeneity in prostate cancer. We integrate multi-region whole-genome sequencing and cell-free DNA to reconstruct subclonal architectures and infer patterns of tumor evolution across primary and metastatic sites.
+This repository contains code, data, and results for analyzing clonal and genomic heterogeneity in metastatic bladder cancer. We integrate multi-tumors whole-genome sequencing and cell-free DNA to reconstruct subclonal architectures and infer patterns of tumor evolution across primary and metastatic sites.
 
 ---
 
