@@ -14,7 +14,7 @@ This repository contains code, data, and results for analyzing clonal and genomi
 ## 📁 Repository Structure
 
 ```bash
-├── data/                # Raw and processed sequencing data
+├── data/                # Raw and processed sequencing data includes source data files
 ├── scripts/             # Analysis and visualization code
 ├── results/             # Output figures and tables
 ├── notebooks/           # Jupyter/R Markdown notebooks
