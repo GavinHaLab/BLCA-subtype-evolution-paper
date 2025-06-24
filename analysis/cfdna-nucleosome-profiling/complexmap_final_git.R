@@ -13,7 +13,7 @@ library(RColorBrewer)
 library(viridis)
 # Sample data: 11 genes x 8 samples
 set.seed(1)
-mat <- as.matrix(read.csv("../data/heatmap_final_list_paper_zscore_git.csv",row.names=1)) # read the input data file that uses the TFBS central coverage values for each of the samples along with other annotations
+mat <- as.matrix(read.csv("../../data/heatmap_final_list_paper_zscore_git.csv",row.names=1)) # read the input data file that uses the TFBS central coverage values for each of the samples along with other annotations
 print(dim(mat)) 
 rownames(mat) <- paste0("Gene", 1:9) #~~~~~~~ Change this to match your gene names
 colnames(mat) <- paste0("Sample", 1:8) #~~~~~~~ Change this to match your sample names
