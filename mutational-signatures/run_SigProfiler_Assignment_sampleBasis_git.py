@@ -2,7 +2,7 @@
 #!/usr/bin/python
 # ===============================================================
 # Script       : run_SigProfiler_Assignment_sampleBasis_git.py
-# Purpose      : Script to generate SBS and DBS based mutational signatures for samples, each sample is provided as a vcf
+# Purpose      : Script to generate SBS and DBS based mutational signatures for samples, each sample is provided as a vcf. A modified clonality version was included for figure 3.
 # Usage        : Run on terminal as python3 run_SigProfiler_extractorAssignment_sampleBasis.py --input_dir ../data/all_samples/ --project_name WGS_BLCA_TAN --exome False
 # Dependencies : SigProfilerMatrixGenerator, SigProfilerExtractor, SigProfilerAssignment,pandas
 # Author       : Pushpa Itagi
