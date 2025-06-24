@@ -15,7 +15,7 @@ library(stringr)
 
 # USE THIS FOR SINGLE FILES
 # Read the .dot file into R as a text file
-filepath <- "../data/19-004_patient_sample_lichee_tree.dot"
+filepath <- "../../data/19-004_patient_sample_lichee_tree.dot"
 
 
 #for (filepath in dot_files_list){
@@ -194,9 +194,9 @@ color_file <- leaf_labels_fromDot %>%
   mutate(color = row_number())
   
 # save machina outputs
-write_tsv(machina_labels, paste0("../results/patient_sample_lichee_tree", patient_id,"-", "labeling.tsv"), col_names = FALSE)
-write_tsv(machina_input_tree, paste0("../results/patient_sample_lichee_tree", patient_id,"-", "tree.tsv"), col_names = FALSE)
-write_tsv(color_file, paste0("../results/patient_sample_lichee_tree", patient_id,"-", "colorfile.tsv"), col_names = FALSE)
+write_tsv(machina_labels, paste0("../../results/patient_sample_lichee_tree", patient_id,"-", "labeling.tsv"), col_names = FALSE)
+write_tsv(machina_input_tree, paste0("../../results/patient_sample_lichee_tree", patient_id,"-", "tree.tsv"), col_names = FALSE)
+write_tsv(color_file, paste0("../../results/patient_sample_lichee_tree", patient_id,"-", "colorfile.tsv"), col_names = FALSE)
 
 #}
 
