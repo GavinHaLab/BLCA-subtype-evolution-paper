@@ -9,7 +9,7 @@ NORMAL=/path/to/samples/Sample-Name1_normal.bam
 TUMOR=/path/to/samples/Sample-Name1_tumor.bam
 
 HG38FA=/path/to/HG38.fasta
-SNP144=./dbsnp_144.hg38.vcf.gz
+SNP144=/path/to/dbsnp_144.hg38.vcf.gz
 varscan=/path/to/MuSEInstallation/VarScan.v2.4.4.jar
 
 resdir=$MAINDIR/varscan2/$SAMPLENAME
