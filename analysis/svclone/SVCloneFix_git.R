@@ -34,7 +34,7 @@ for (sample in samples) {
     # Add the number of SVs that are clonal. We're defining this as CCF >= 0.9
     clonal_prop = sum(sv_csv$n_ssms[sv_csv$CCF >= 0.9])/sum(sv_csv$n_ssms)
     clonal_props = c(clonal_props, clonal_prop)
-    write.table(sv_csv, file=paste0(base_dir, sample, "/ccube_out/", sample,"_subclonal_structure_with_CCF.txt"), row.names = F)
+    write.table(sv_csv, file=paste0(base_dir, sample, "/ccube_out/", sample,"_subclonal_structure_with_CCF_summary.txt"), row.names = F)
 }
 
 subclonal_props = 1 - clonal_props
