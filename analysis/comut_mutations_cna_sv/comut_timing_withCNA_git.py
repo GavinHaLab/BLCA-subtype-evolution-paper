@@ -2,13 +2,14 @@
 #!/usr/bin/python
 # ===============================================================
 # Script       : comut_timing_withCNA_git.py
-# Purpose      : Script to generate a comut/oncoprint plot using muttaions, CNAS and SVs. Make a landscape styled Figure 3A comut plot
+# Purpose      : Script to generate a comut/oncoprint plot using mutations, CNAS and SVs. Make a landscape styled Figure 3A comut plot
 # Usage        : Run on terminal as python3 comut_timing_withCNA_git.py
 # Dependencies : comput, pandas
 # Author       : Pushpa Itagi
 # Note:
 #   - This script uses a input parameters that can be modified:
-#       * input_file directories    – path to input data where we have annotation data such as sample names, histology etc
+#       * input_file directories    – path to input data where we have annotation data such as ./../data/mutations_cna_sv_in_allDrivergenes_noMixed_filtered_singleOccurrence.csv, 
+#       * input_file directories    – snv_coding_nonsynonmous_splicing.csv, WESWGS_variant.csv, WESWGS_tissue.csv, ../../data/snv_coding_nonsynonmous_splicing.csv, ../../data/tumorFraction_ploidy.csv
 #       * output_file directories   – path to output data where files are stored
 
 # Load required modules
@@ -34,7 +35,7 @@ import matplotlib as mpl
 # Set Type 42 font embedding
 mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype'] = 42
-driver_genes_blca = "./drivergene_manual_annotations3.csv"
+driver_genes_blca = "./drivergene_manual_annotations_finalBLCAPaperJune2025.csv"
 
 
 # Function to generate side bar data for the comut plot
