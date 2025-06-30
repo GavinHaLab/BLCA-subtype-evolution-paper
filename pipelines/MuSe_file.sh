@@ -10,7 +10,7 @@ TUMOR=/path/to/samples/Sample-Name1_tumor.bam
 
 
 HG38FA=/path/to/HG38.fasta
-SNP144=./dbsnp_144.hg38.vcf.gz
+SNP144=/path/to/dbsnp_144.hg38.vcf.gz
 MuSE=/path/to/MuSEInstallation/
 
 resdir=$MAINDIR/muse/$SAMPLENAME
