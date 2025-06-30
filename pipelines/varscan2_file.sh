@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -N1 -n4-t 3-0
-
+# Bash script to launch a job with one tumor and normal pair bam file for running MuSE caller. This script was used in a wrapper for running multiple samples on the HPC cluster. 
 MAINDIR=/path/to/Muse/Directory
 
 SAMPLENAME=Sample-Name1
