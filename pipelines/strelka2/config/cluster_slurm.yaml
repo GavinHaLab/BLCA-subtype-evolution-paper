@@ -1,0 +1,24 @@
+#cluster_slurm.yaml for mutect2.snakefile
+#Anna Hoge
+#Template made October 18th, 2019
+#Ha Lab
+#Fred Hutchinson Cancer Research Center
+
+__default__:
+    partition: campus-new
+    time: "150:0:0"
+    mem: 5G
+    ncpus: 4
+    ntasks: 1
+    output: logs/cluster/{rule}.%A.out
+
+strelka2_configure:
+    time: "1:0:0"
+    mem: 1G
+ 
+strelka2_submit:
+   ncpus: 4
+   ntasks: 1
+   output: logs/cluster/{rule}.%A.out
+   time: "150:0:0"
+   mem: 10G

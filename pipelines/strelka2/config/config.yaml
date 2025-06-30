@@ -1,0 +1,43 @@
+#config.yaml for mutect2.snakefile
+#Anna Hoge
+#Template made October 18th, 2019
+#Ha Lab
+#Fred Hutchinson Cancer Research Center
+
+###################################################
+### DEPRECATED, PLEASE USE CONFIG-STRELKA2.YAML ###
+###################################################
+
+#SELECT PANEL OF NORMALS IN VCF.GZ FORMAT OR "null"
+panel_of_normals: 'null'
+
+#reference genome for mutect2 call, with index files in same folder as .fa file
+reference_genome:
+    #/fh/fast/ha_g/grp/reference/GRCh38/10XG/refdata-GRCh38-2.1.0/fasta/genome.fa
+    #/fh/fast/ha_g/grp/reference/GRCh37/GRCh37.fa
+    #/fh/fast/ha_g/grp/reference/GRCh37_NCBI/human_g1k_v37.fasta
+    /fh/fast/ha_g/grp/reference/GRCh38/Broad_bundle_hg38/v0/Homo_sapiens_assembly38.fasta #For HG38 ref, BROAD version
+
+#with index files in same folder as .vcf.gz file
+mutect2_germline_resource:
+    /fh/fast/ha_g/grp/reference/GRCh38/known_polymorphic_sites/somatic-hg38_af-only-gnomad.hg38.vcf.gz
+    #/fh/fast/ha_g/grp/reference/GRCh37/known_polymorphic_sites/af-only-gnomad.raw.sites.b37_with_chr.vcf.gz
+    #/fh/fast/ha_g/grp/reference/GRCh37/known_polymorphic_sites/af-only-gnomad.raw.sites.b37.vcf.gz
+
+#used for get_pileup_summaries
+known_polymorphic_sites:
+    /fh/fast/ha_g/grp/reference/GRCh38/known_polymorphic_sites/somatic-hg38_small_exac_common_3.hg38.vcf.gz
+    #/fh/fast/ha_g/grp/reference/GRCh37/known_polymorphic_sites/small_exac_common_3_b37_with_chr.vcf.gz
+    #/fh/fast/ha_g/grp/reference/GRCh37/known_polymorphic_sites/small_exac_common_3_b37.vcf.gz
+
+#used for running mutect2 by interval
+chromosomes: ['chr1','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr20','chr21','chr22','chrX', 'chrY']
+#chromosomes: /fh/fast/ha_g/projects/Ha_Hsieh_BladderCancer/analysis/mutationCallingFilters/grep_outputs/with-PON_withNormalSamples/snvs_intervals/UW_tvaf1per/15-108_sort.intervals
+
+#tools used.  these must be module loaded before running snakemake. see snakefile for load commands
+gatk: /app/software/GATK/4.1.8.1-GCCcore-8.3.0-Java-11/gatk
+java: /app/software/Java/11.0.2/bin/java
+tabix: /app/software/tabix/0.2.6-GCCcore-8.3.0/bin/tabix
+picard_jar: $EBROOTPICARD/picard.jar
+interpreter: python3
+annovar_python_script: /fh/fast/ha_g/projects/ProstateTAN/analysis_mutational/mutect2_strelka2_snakemake/config/runAnnovar_mutect2_perSample.py
