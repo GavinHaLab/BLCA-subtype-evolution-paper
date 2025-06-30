@@ -1,0 +1,397 @@
+---
+title: "seurat1000_noD_cluster"
+output: html_document
+date: "2024-08-15"
+---
+
+libraries
+```{r}
+library(Seurat)
+library(DoubletFinder)
+library(ggpubr)
+library(pals)
+library(tidyverse)
+
+set.seed(42)
+```
+
+import original, unfiltered seurat object
+```{r}
+allseurat = readRDS("initial_seurat1_obj.rds")
+#metadata: "orig.ident"   "nCount_RNA"   "nFeature_RNA" "percent.mito" "percent.ribo" "batch"        "met_site"     "sampleName"   "tumor_type"   "histology"
+
+#add patient column to metadata
+patient = substr(allseurat@meta.data$sampleName, 1, 6)
+allseurat$patient = patient
+```
+
+filter
+```{r}
+# filter cells: nCount_RNA > 1,000, nCount_RNA < 50,000, percent.mito<0.20
+seurat1000 <- subset(allseurat, subset = nCount_RNA<50000 & nCount_RNA>1000 & percent.mito<0.2)
+```
+
+initial seurat pipeline
+```{r}
+seurat1000[["RNA"]] <- split(seurat1000[["RNA"]], f = seurat1000$batch)
+
+#runs for each batch since layers are split
+seurat1000 <- NormalizeData(seurat1000) #default = "LogNormalize", scale.factor=10000; normalized data in data.batch1/data.batch2
+seurat1000 <- FindVariableFeatures(seurat1000) #add 2000 variable features to RNA assay
+seurat1000 = ScaleData(seurat1000) #new layer: scale.data
+seurat1000 <- RunPCA(seurat1000) #new dimensional reduction: pca
+
+#investigate dimensions before continuing -> use 30 for all
+ElbowPlot(seurat1000, ndims = 50) + geom_hline(yintercept=2)
+
+#continue with clusters
+seurat1000 <- FindNeighbors(seurat1000, dims = 1:30, reduction = "pca")
+seurat1000 <- FindClusters(seurat1000, resolution = 2, cluster.name = "unintegrated_clusters")
+seurat1000 <- RunUMAP(seurat1000, dims = 1:30, reduction = "pca", reduction.name = "umap.unintegrated")
+
+#visualize (w/o batch correction)
+DimPlot(seurat1000, reduction = "umap.unintegrated", group.by = "batch") 
+
+#batch correction
+##CCA, takes ~20min
+seurat1000 <- IntegrateLayers(
+  object = seurat1000, method = CCAIntegration,
+  orig.reduction = "pca", new.reduction = "integrated.cca"
+)
+#find clusters in batch corrected
+seurat1000 <- FindNeighbors(seurat1000, reduction = "integrated.cca", dims = 1:30)
+seurat1000 <- FindClusters(seurat1000, resolution = 2, cluster.name = "cca_clusters")
+seurat1000 <- RunUMAP(seurat1000, reduction = "integrated.cca", dims = 1:30, reduction.name = "umap.cca")
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "sampleName", alpha=0.2) +
+  scale_color_manual(values=unname(glasbey()))
+
+```
+
+annotate cell types
+```{r}
+### REFERENCE DATA ###
+#CCP lists
+cc.genes.updated.2019
+s.genes <- cc.genes.updated.2019$s.genes
+g2m.genes <- cc.genes.updated.2019$g2m.genes
+CCP <-toupper(c('Foxm1', 'Aspm', 'Tk1', 'Prc1', 'Cdc20', 'Bub1b', 'Pbk', 'Dtl',
+                  'Cdkn3', 'Rrm2', 'Asf1b', 'Cep55', 'Cdk1', 'Dlgap5', 'Ska1', 'Rad51',
+                  'Kif11', 'Birc5', 'Rad54l', 'Cenpm', 'Pclaf', 'Kif20a', 'Pttg1',
+                  'Cdca8', 'Nusap1', 'Plk1', 'Cdca3', 'Orc6', 'Cenpf', 'Top2a', 'Mcm10'))
+alex_gset <- list( "CCP" = CCP)
+#HPCA lists
+hpca.ref <- readRDS("hpca_ref.rds")
+# hpca.ref <- celldex::HumanPrimaryCellAtlasData()
+my_cell_types <- c('B_cell','DC','Endothelial_cells','Epithelial_cells','Erythroblast','Fibroblasts','Hepatocytes','HSC_-G-CSF','Keratinocytes','Macrophage','Monocyte','MSC','Neuroepithelial_cell','Neutrophils','NK_cell','Platelets','T_cells')
+hpca.ref_subset <- hpca.ref[, hpca.ref$label.main %in% my_cell_types]
+#fibroblast genes
+mgenes = 50
+paper_goi = read.csv("DEGs_cafs_41467_2023_39762_MOESM6_ESM.csv")
+table(paper_goi$cluster)
+sp = split(paper_goi, paper_goi$cluster)
+sp = lapply(sp, function(x) x[order(x$avg_log2FC, decreasing=T), ] ) #sort decreasing log2FC
+gset = lapply(sp, function(x) { #subset to top 50 genes
+    if(nrow(x)< mgenes){
+      x$gene
+    }else{
+      x$gene[1:mgenes]
+    }
+  })
+
+### ANNOTATIONS ###
+seurat1000 <- JoinLayers(seurat1000)
+#CCP
+seurat1000 <- CellCycleScoring(seurat1000, s.features = s.genes, g2m.features = g2m.genes)
+seurat1000 = AddModuleScore(seurat1000, features = alex_gset, name = names(alex_gset))
+
+#HPCA
+##main reference
+# sce <- as.SingleCellExperiment(DietSeurat(seurat1000))
+# hpca.main <- SingleR(test = sce, assay.type.test = 1, ref = hpca.ref, labels = hpca.ref$label.main)
+# seurat1000@meta.data$hpca.main   <- hpca.main$pruned.labels
+##subsetted reference
+sce <- as.SingleCellExperiment(DietSeurat(seurat1000))
+hpca_subset <- SingleR(test = sce, assay.type.test = 1, ref = hpca.ref_subset, labels = hpca.ref_subset$label.main)
+seurat1000@meta.data$hpca_subset   <- hpca_subset$pruned.labels
+
+#Fibroblasts
+seurat1000 = AddModuleScore(seurat1000, features = gset, name = names(gset))
+#choose highest score
+##subset out CAF cols from metadata
+idx = match(paste0(names(gset), 1:10), colnames(seurat1000@meta.data))
+temp = seurat1000@meta.data[, idx]
+##find top score
+pred = apply(temp, 1, function(x) c(x[which.max(x)],  names(gset)[which.max(x)] ) )
+pred = t(pred)
+summary(as.numeric(pred[,1]))
+colnames(pred) = c("caf.max.score", "caf.pred")
+##add top scoring CAF prediction to seurat object
+seurat1000@meta.data = cbind(seurat1000@meta.data, pred)
+seurat1000@meta.data$caf.max.score = as.numeric(seurat1000@meta.data$caf.max.score)
+#caf.pred_higher_category = only predict cells with CAF scores over 0.5
+seurat1000@meta.data$caf.pred_higher_category =  seurat1000@meta.data$caf.pred
+seurat1000@meta.data$caf.pred_higher_category[which(as.numeric(seurat1000@meta.data$caf.max.score) < 0.5)] = NA_integer_
+
+### MANUAL CELL TYPE ###
+seu2000_celltype <-list(Epithelial = c(9,24,16,18,31,13,20,21,5,4,44,40,0,48,35,12,17,34,15,19,33,10,1,41,22,27), 
+                         Hepatocyte = c(36,14,47), 
+                         Endothelial_large = c(7,45,29), 
+                         Endothelial_small = c(32), 
+                         Fibroblast = c(8,6,39,30,37,28,23,46), 
+                         B_cell =c(2,38,42),
+                         T_cell=c(3), 
+                         Myeloid=c(11,25,26))
+seu2000_celltype <- do.call(rbind, lapply(names(seu2000_celltype), function(celltype) {
+  data.frame(cca_clusters = seu2000_celltype[[celltype]], cell_type = celltype, stringsAsFactors = FALSE)
+}))
+df1 <- seurat1000@meta.data %>% select(cca_clusters) %>%
+  mutate(cca_clusters = as.double(as.character(cca_clusters))) %>%
+  rownames_to_column() %>%
+  left_join(seu2000_celltype)
+seurat1000 <- AddMetaData(seurat1000, df1)
+DimPlot(seurat1000, reduction="umap.cca", group.by = "cell_type", shuffle = T, alpha=0.7) + scale_color_manual(values=unname(trubetskoy()))
+```
+
+run doubletfinder (separate by batch)
+```{r}
+### SET UP SEURAT OBJECTS PER BATCH ###
+seu_batch1 <- subset(seurat1000, subset= batch=="batch1")
+seu_batch2 <- subset(seurat1000, subset= batch=="batch2")
+
+#re-clustering batch1
+seu_batch1[["RNA"]] <- split(seu_batch1[["RNA"]], f = seu_batch1$batch)
+seu_batch1 <- NormalizeData(seu_batch1) 
+seu_batch1 <- FindVariableFeatures(seu_batch1) 
+seu_batch1 = ScaleData(seu_batch1) 
+seu_batch1 <- RunPCA(seu_batch1) 
+seu_batch1 <- FindNeighbors(seu_batch1, dims = 1:20, reduction = "pca")
+seu_batch1 <- FindClusters(seu_batch1, resolution = 1, cluster.name = "unintegrated_clusters")
+seu_batch1 <- RunUMAP(seu_batch1, dims = 1:20, reduction = "pca", reduction.name = "umap.unintegrated")
+DimPlot(seu_batch1, reduction = "umap.unintegrated", group.by = "unintegrated_clusters")
+
+#re-clustering batch2
+seu_batch2[["RNA"]] <- split(seu_batch2[["RNA"]], f = seu_batch2$batch)
+seu_batch2 <- NormalizeData(seu_batch2) 
+seu_batch2 <- FindVariableFeatures(seu_batch2) 
+seu_batch2 = ScaleData(seu_batch2) 
+seu_batch2 <- RunPCA(seu_batch2) 
+seu_batch2 <- FindNeighbors(seu_batch2, dims = 1:20, reduction = "pca")
+seu_batch2 <- FindClusters(seu_batch2, resolution = 1, cluster.name = "unintegrated_clusters")
+seu_batch2 <- RunUMAP(seu_batch2, dims = 1:20, reduction = "pca", reduction.name = "umap.unintegrated")
+DimPlot(seu_batch2, reduction = "umap.unintegrated", group.by = "unintegrated_clusters")
+
+#investigate dimensions -> choose 23 for all
+print(ElbowPlot(seu_batch1, ndims = 50) + geom_hline(yintercept=2))
+print(ElbowPlot(seu_batch2, ndims = 50) + geom_hline(yintercept=2))
+
+###CHOOSE PK ###
+sweep.res.list_1 <- paramSweep(seu_batch1, PCs = 1:23, sct = FALSE)
+sweep.stats_1 <- summarizeSweep(sweep.res.list_1, GT = FALSE)
+bcmvn_1 <- find.pK(sweep.stats_1) #best for batch1=0.27, almost equal=0.01
+
+sweep.res.list_2 <- paramSweep(seu_batch2, PCs = 1:23, sct = FALSE)
+sweep.stats_2 <- summarizeSweep(sweep.res.list_2, GT = FALSE)
+bcmvn_2 <- find.pK(sweep.stats_2) #best for batch2=0.12, almost equal=0.005
+
+### HOMOTYPIC DOUBLET PROP ###
+#batch1: nExp=1791, nExp_adj=1131
+homotypic.prop_1 <- modelHomotypic(seu_batch1@meta.data$cell_type)
+nExp_poi_1 <- round(0.075*nrow(seu_batch1@meta.data))  ## Assuming 7.5% doublet formation rate - tailor for your dataset
+nExp_poi.adj_1 <- round(nExp_poi_1*(1-homotypic.prop_1))
+#batch2: nExp=1340, nExp_adj=723
+homotypic.prop_2 <- modelHomotypic(seu_batch2@meta.data$cell_type)
+nExp_poi_2 <- round(0.075*nrow(seu_batch2@meta.data))  ## Assuming 7.5% doublet formation rate - tailor for your dataset
+nExp_poi.adj_2 <- round(nExp_poi_2*(1-homotypic.prop_2))
+
+### RUN DOUBLETFINDER ###
+#batch 1 (no difference between different pK values)
+#pK=0.27, nExp adjusted for homotypic
+seu_batch1 <- doubletFinder(seu_batch1, PCs = 1:23, pN = 0.25, pK = 0.27, nExp = 1131, reuse.pANN = F, sct = FALSE)
+#pK=0.01, nExp adjusted for homotypic
+seu_batch1 <- doubletFinder(seu_batch1, PCs = 1:23, pN = 0.25, pK = 0.01, nExp = 1131, reuse.pANN = F, sct = FALSE)
+
+#batch 2 (no difference between different pK values)
+#pK=0.12, nExp adjusted for homotypic
+seu_batch2 <- doubletFinder(seu_batch2, PCs = 1:23, pN = 0.25, pK = 0.12, nExp = 723, reuse.pANN = F, sct = FALSE)
+#pK=0.005, nExp adjusted for homotypic
+seu_batch2 <- doubletFinder(seu_batch2, PCs = 1:23, pN = 0.25, pK = 0.005, nExp = 723, reuse.pANN = F, sct = FALSE)
+
+### ANNOTATE IN SEURAT OBJECT ###
+##using pK 0.01, 0.005
+df1 <- data.frame(doublet = seu_batch1@meta.data$DF.classifications_0.25_0.01_1131, row.names = rownames(seu_batch1@meta.data))
+df2 <- data.frame(doublet = seu_batch2@meta.data$DF.classifications_0.25_0.005_723, row.names = rownames(seu_batch2@meta.data))
+doublets <- rbind(df1, df2)
+seurat1000 <- AddMetaData(seurat1000, doublets)
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "doublet")
+FeaturePlot(seurat1000, reduction = "umap.cca", features = "nCount_RNA")
+
+#rm(sweep.stats_1, sweep.stats_2, sweep.res.list_1, sweep.res.list_2, homotypic.prop_1, homotypic.prop_2, nExp_poi_1, nExp_poi_2, nExp_poi.adj_1, nExp_poi.adj_2, bcmvn_1, bcmvn_2)
+```
+
+filter out doublets, redo seurat pipeline
+```{r}
+##filter
+#seurat1000_noD <- subset(seurat1000, subset=doublet=="Singlet")
+doublet_ids <- filter(doublets, doublet=="Doublet") %>% rownames_to_column(var="cell_id") %>% pull(cell_id)
+ids_1000 <- seurat1000@meta.data %>% rownames_to_column(var="cell_id") %>% pull(cell_id)
+ids_1000_noD <- ids_1000[!ids_1000 %in% doublet_ids]
+seurat1000_noD <- subset(allseurat, cells = ids_1000_noD)
+
+seurat1000_noD[["RNA"]] <- split(seurat1000_noD[["RNA"]], f = seurat1000_noD$batch)
+  
+#runs for each batch since layers are split
+seurat1000_noD <- NormalizeData(seurat1000_noD) #default = "LogNormalize", scale.factor=10000; normalized data in data.batch1/data.batch2
+seurat1000_noD <- FindVariableFeatures(seurat1000_noD) #add 2000 variable features to RNA assay
+seurat1000_noD = ScaleData(seurat1000_noD) #new layer: scale.data
+seurat1000_noD <- RunPCA(seurat1000_noD) #new dimensional reduction: pca
+
+#investigate dimensions before continuing -> use 30 for all
+ElbowPlot(seurat1000_noD, ndims = 50) + geom_hline(yintercept=2)
+DimHeatmap(seurat1000_noD, dims = 21:30, cells = 500, balanced = TRUE)
+print(seurat1000_noD[["pca"]], dims = 21:30, nfeatures = 10)
+
+#continue with clusters
+seurat1000_noD <- FindNeighbors(seurat1000_noD, dims = 1:30, reduction = "pca")
+seurat1000_noD <- FindClusters(seurat1000_noD, resolution = 1.75, cluster.name = "unintegrated_clusters")
+seurat1000_noD <- RunUMAP(seurat1000_noD, dims = 1:30, reduction = "pca", reduction.name = "umap.unintegrated")
+#seurat1000_noD <- RunTSNE(seurat1000_noD, dims=1:30, reduction = "pca", reduction.name = "tsne.unintegrated")
+
+#visualize (w/o batch correction)
+DimPlot(seurat1000_noD, reduction = "umap.unintegrated", group.by = "sampleName")
+
+#batch correction
+##CCA, takes ~20min
+seurat1000_noD <- IntegrateLayers(
+  object = seurat1000_noD, method = CCAIntegration,
+  orig.reduction = "pca", new.reduction = "integrated.cca"
+)
+#find clusters in batch corrected
+seurat1000_noD <- FindNeighbors(seurat1000_noD, reduction = "integrated.cca", dims = 1:30)
+seurat1000_noD <- FindClusters(seurat1000_noD, resolution = 1.75, cluster.name = "cca_clusters")
+seurat1000_noD <- RunUMAP(seurat1000_noD, reduction = "integrated.cca", dims = 1:30, reduction.name = "umap.cca")
+#seurat1000_noD <- RunTSNE(seurat1000_noD, reduction = "integrated.cca", dims = 1:30, reduction.name = "tsne.cca")
+
+
+# DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "cell_type", alpha=0.8, shuffle = T) +
+#     scale_color_manual(values=c(unname(glasbey()), unname(trubetskoy())))
+# DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "hpca_subset", alpha=0.8, shuffle = T) +
+#     scale_color_manual(values=c(unname(glasbey()), unname(trubetskoy())))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "sampleName", alpha=0.8, shuffle = T) +
+    scale_color_manual(values=c(unname(glasbey()), unname(trubetskoy())))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "cca_clusters", alpha=0.8, shuffle = T, label=T) +
+    scale_color_manual(values=c(unname(polychrome()), unname(trubetskoy())))
+FeaturePlot(seurat1000_noD, reduction = "umap.cca", features = "nCount_RNA")
+```
+
+final annotations
+```{r}
+### ANNOTATIONS ###
+seurat1000_noD <- JoinLayers(seurat1000_noD)
+#CCP
+seurat1000_noD <- CellCycleScoring(seurat1000_noD, s.features = s.genes, g2m.features = g2m.genes)
+seurat1000_noD = AddModuleScore(seurat1000_noD, features = alex_gset, name = names(alex_gset))
+
+#HPCA
+##main reference
+# sce <- as.SingleCellExperiment(DietSeurat(seurat1000_noD))
+# hpca.main <- SingleR(test = sce, assay.type.test = 1, ref = hpca.ref, labels = hpca.ref$label.main)
+# seurat1000_noD@meta.data$hpca.main   <- hpca.main$pruned.labels
+##subsetted reference
+sce <- as.SingleCellExperiment(DietSeurat(seurat1000_noD))
+hpca_subset <- SingleR(test = sce, assay.type.test = 1, ref = hpca.ref_subset, labels = hpca.ref_subset$label.main)
+seurat1000_noD@meta.data$hpca_subset   <- hpca_subset$pruned.labels
+
+#Fibroblasts
+seurat1000_noD = AddModuleScore(seurat1000_noD, features = gset, name = names(gset))
+#choose highest score
+##subset out CAF cols from metadata
+idx = match(paste0(names(gset), 1:10), colnames(seurat1000_noD@meta.data))
+temp = seurat1000_noD@meta.data[, idx]
+##find top score
+pred = apply(temp, 1, function(x) c(x[which.max(x)],  names(gset)[which.max(x)] ) )
+pred = t(pred)
+summary(as.numeric(pred[,1]))
+colnames(pred) = c("caf.max.score", "caf.pred")
+##add top scoring CAF prediction to seurat object
+seurat1000_noD@meta.data = cbind(seurat1000_noD@meta.data, pred)
+seurat1000_noD@meta.data$caf.max.score = as.numeric(seurat1000_noD@meta.data$caf.max.score)
+#caf.pred_higher_category = only predict cells with CAF scores over 0.5
+seurat1000_noD@meta.data$caf.pred_higher_category =  seurat1000_noD@meta.data$caf.pred
+seurat1000_noD@meta.data$caf.pred_higher_category[which(as.numeric(seurat1000_noD@meta.data$caf.max.score) < 0.5)] = NA_integer_
+
+## AUTOMATE "CELL_TYPE" ANNOTATIONS ##
+cell_ann <- seurat1000_noD@meta.data %>%
+  mutate(cca_clusters = as.double(as.character(cca_clusters))) %>%
+  group_by(cca_clusters) %>%
+  dplyr::count(hpca_subset) %>%
+  slice_max(n) %>%
+  ungroup() %>%
+  dplyr::rename(cell_type=hpca_subset)
+df1 <- seurat1000_noD@meta.data %>% select(cca_clusters) %>%
+  mutate(cca_clusters = as.double(as.character(cca_clusters))) %>%
+  rownames_to_column() %>%
+  left_join(cell_ann %>% select(cca_clusters, cell_type))
+rownames(df1) <- df1$rowname
+seurat1000_noD <- AddMetaData(seurat1000_noD, df1 %>% select(cell_type))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by="cell_type", shuffle = T, alpha=0.75) +
+  scale_color_manual(values=unname(trubetskoy()))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by="hpca_subset", shuffle = T, alpha=0.75) +
+  scale_color_manual(values=unname(trubetskoy()))
+cell_types7 <- seurat1000_noD@meta.data %>% 
+  select(cell_type) %>%
+  mutate(cell_type7 = case_match(cell_type, "Monocyte"~"Myeloid", "Macrophage"~"Myeloid", .default = cell_type))
+seurat1000_noD <- AddMetaData(seurat1000_noD, cell_types7)
+
+##extra metadata:
+#log10nCount
+seurat1000_noD@meta.data$log10nCount <- log10(seurat1000_noD@meta.data$nCount_RNA)
+#sex
+df2 <- data.frame(patient = c("15_109", "16_079" ,"17_026" ,"17_030", "17_071", "18_120", "19_007", "19_022", "19_044"), 
+           sex = c("Male", "Female", rep("Male",6), "Female"))
+df1 <- seurat1000_noD@meta.data %>% select(patient) %>%
+  rownames_to_column(var="barcode") %>%
+  left_join(df2)
+rownames(df1) <- df1$barcode
+seurat1000_noD <- AddMetaData(seurat1000_noD, df1 %>% select(sex))
+#bulk molecular subtype
+bulk_mol_subtype <- data.frame(sampleName = sort(unique(seurat1000_noD@meta.data$sampleName)), 
+                               bulk_MIBC = c("LumU", rep("Ba_Sq", 7), "LumU", "Stroma-rich", "LumU", "Ba_Sq", "LumP", rep("Ba_Sq",2)))
+df1 <- seurat1000_noD@meta.data %>% select(sampleName) %>%
+  rownames_to_column(var="barcode") %>%
+  left_join(bulk_mol_subtype)
+rownames(df1) <- df1$barcode
+seurat1000_noD <- AddMetaData(seurat1000_noD, df1 %>% select(bulk_MIBC))
+```
+
+save out UMAPs & RDS
+```{r}
+saveRDS(seurat1000_noD, "seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+
+hist_col <- c("UC"="#815ba6","PUC"="#ffc214","NE"="#f9c9de","UCSD-Focal"="#ACD7A1","UCSD"="#418100")
+
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "histology", shuffle = T, alpha=0.8) +
+  scale_color_manual(values=hist_col)
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "cca_clusters",label=T, shuffle = T, alpha=0.8) +
+  scale_color_manual(values=c(unname(polychrome()), unname(trubetskoy())))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "sampleName", shuffle = T, alpha=0.8) +
+  scale_color_manual(values=unname(glasbey()))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "cell_type", shuffle = T, alpha=0.8) +
+  scale_color_manual(values=unname(trubetskoy()))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "hpca_subset", shuffle = T, alpha=0.8) +
+  scale_color_manual(values=unname(trubetskoy()))
+#DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "Ep_Hist", shuffle = T, alpha=0.8)
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "sex", shuffle = T, alpha=0.8) +
+  scale_color_manual(values=unname(trubetskoy()))
+DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "bulk_MIBC", shuffle = T, alpha=0.8) +
+  scale_color_manual(values=unname(trubetskoy()))
+FeaturePlot(seurat1000_noD, reduction = "umap.cca", features = "log10nCount") +
+  scale_color_gradientn(colors=magma(1000))
+
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "histology", shuffle = T, alpha=0.8)
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "cca_clusters",label=T, shuffle = T, alpha=0.8)
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "sampleName", shuffle = T, alpha=0.8)
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "cell_type", shuffle = T, alpha=0.8)
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "hpca_subset", shuffle = T, alpha=0.8)
+DimPlot(seurat1000, reduction = "umap.cca", group.by = "doublet", shuffle = T, alpha=0.8)
+
+```

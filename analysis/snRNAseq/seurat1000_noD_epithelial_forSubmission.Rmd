@@ -1,0 +1,155 @@
+---
+title: "seurat1000_noD_epithelial_cluster"
+output: html_document
+date: "2024-08-15"
+---
+
+libraries
+```{r}
+library(Seurat)
+library(pals)
+library(tidyverse)
+```
+
+import seurat1000_noD
+```{r}
+seurat1000_noD <- readRDS("Seurat/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+
+hist_col <- c("UC"="#815ba6","PUC"="#ffc214","NE"="#f9c9de","UCSD-Focal"="#ACD7A1","UCSD"="#418100")
+```
+
+filter to epithelial & re-cluster
+```{r}
+#re-clustering
+seurat_ep <- subset(seurat1000_noD, subset=cell_type=="Epithelial_cells")
+seurat_ep[["RNA"]] <- split(seurat_ep[["RNA"]], f = seurat_ep$batch)
+seurat_ep <- NormalizeData(seurat_ep) 
+seurat_ep <- FindVariableFeatures(seurat_ep) 
+seurat_ep = ScaleData(seurat_ep) 
+seurat_ep <- RunPCA(seurat_ep) 
+  
+#investigate dimensions
+ElbowPlot(seurat_ep, ndims = 50) + geom_hline(yintercept=2) #elbow ~20
+
+#continue pipeline, finding clusters
+seurat_ep <- FindNeighbors(seurat_ep, dims = 1:20, reduction = "pca")
+seurat_ep <- FindClusters(seurat_ep, resolution = 1.25, cluster.name = "unintegrated_clusters")
+seurat_ep <- RunUMAP(seurat_ep, dims = 1:20, reduction = "pca", reduction.name = "umap.unintegrated")
+#visualize umap (w/o batch correction)
+DimPlot(seurat_ep, reduction = "umap.unintegrated", group.by = "batch")
+DimPlot(seurat_ep, reduction = "umap.unintegrated", group.by = "sampleName")
+DimPlot(seurat_ep, reduction = "umap.unintegrated", group.by = "unintegrated_clusters")
+
+#batch correction
+seurat_ep <- IntegrateLayers(
+    object = seurat_ep, method = CCAIntegration,
+    orig.reduction = "pca", new.reduction = "integrated.cca"
+  )
+
+seurat_ep <- FindNeighbors(seurat_ep, reduction = "integrated.cca", dims = 1:20)
+seurat_ep <- FindClusters(seurat_ep, resolution = 1.25, cluster.name = "ep_clusters")
+seurat_ep <- RunUMAP(seurat_ep, reduction = "integrated.cca", dims = 1:20, reduction.name = "umap.cca")
+
+#join layers for downstream (DEG)
+seurat_ep <- JoinLayers(seurat_ep)
+```
+
+manual annotation of histology clusters
+```{r}
+Ep_UC <- c(0,1,24,26,25)
+Ep_PUC <- c(10,23,3,15,16,9,19,27)
+Ep_SQ <- c(2,18,8,4,12,11,13,21,17,5,22)
+hist_ann <- data.frame(ep_clusters = c(Ep_UC, Ep_PUC, Ep_SQ), 
+                       Ep_Hist = c(rep("Ep_UC", length(Ep_UC)), 
+                                   rep("Ep_PUC", length(Ep_PUC)), 
+                                   rep("Ep_SQ", length(Ep_SQ))))
+df1 <- seurat_ep@meta.data %>% select(ep_clusters) %>%
+  mutate(ep_clusters = as.numeric(as.character(ep_clusters))) %>%
+  rownames_to_column(var="barcode") %>%
+  left_join(hist_ann)
+rownames(df1) <- df1$barcode
+seurat_ep <- AddMetaData(seurat_ep, df1 %>% select(Ep_Hist))
+
+DimPlot(seurat_ep, reduction="umap.cca", group.by = "Ep_Hist")
+```
+
+save object
+```{r}
+saveRDS(seurat_ep, "seurat1000_noD_epithelial_dim20res1.25.rds")
+```
+
+
+visualize UMAPs
+```{r}
+#overall metadata
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "ep_clusters", shuffle = T, label = T, alpha=0.7) + scale_color_manual(values=unname(glasbey()))
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.cca_clusters.tiff", width=6, height=5)
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "batch", shuffle = T, alpha=0.7)
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.batch.tiff", width=6, height=5)
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "sampleName", shuffle = T, alpha=0.7) + scale_color_manual(values=unname(glasbey()))
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.sampleName.tiff", width=6, height=5)
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "hpca_subset", shuffle = T, alpha=0.7) + scale_color_manual(values=unname(glasbey()))
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.hpca_subset.tiff", width=6, height=5)
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "met_site", shuffle = T, alpha=0.7) + scale_color_manual(values=unname(trubetskoy()))
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.met_site.tiff", width=6, height=5)
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "histology", shuffle = T, alpha=0.7) + scale_color_manual(values=hist_col)
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.histology.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "CCP1") + scale_color_gradientn(colors=magma(1000))
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.CCP.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "log10nCount") + scale_color_gradientn(colors=magma(1000))
+#ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.log10nCount.tiff", width=6, height=5)
+
+#splitting with background
+umap_data <- Embeddings(seurat_ep, "umap.cca")
+meta_data <- seurat_ep@meta.data
+seurat_ep_df <- cbind(umap_data, meta_data)
+
+ggplot(seurat_ep_df, aes(x = umapcca_1, y = umapcca_2, color = ep_clusters)) +
+  geom_point(data = seurat_ep_df %>% select(-ep_clusters), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~ep_clusters) +
+  scale_color_manual(values=unname(glasbey())) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+ggsave("seurat_var/Epithelial/CCP_byEpHist.tiff", width=8, height=6)
+
+#specific markers
+##Luminal: UPK3A, UPK1A, UPK1B, UPK2, UPK3B, KRT18, KRT20, PPARG, FOXA1, GATA3
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "UPK2")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.UPK2.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT18")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.KRT18.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "PPARG")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.PPARG.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "GATA3")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.GATA3.tiff", width=6, height=5)
+
+##Basal: TP63, KRT5, KRT6A, KRT17, KRT14, CDH3, KRT19, KRT13, CD44
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "TP63")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.TP63.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT5")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.KRT5.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT6A")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.KRT6A.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT13")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.KRT13.tiff", width=6, height=5)
+
+##down in PUC: CDH1
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "CDH1")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.CDH1.tiff", width=6, height=5)
+
+##up in PUC: SNAI1, TGFB2, ERBB2, SDC1
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "SNAI1")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.SNAI1.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "TGFB2")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.TGFB2.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "ERBB2")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.ERBB2.tiff", width=6, height=5)
+
+##up in LumP/UC: FGFR3
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "FGFR3")
+  ggsave("Seurat/seurat1000_noD_epithelial_UMAPs/epithelial.FGFR3.tiff", width=6, height=5)
+```
+

@@ -1,0 +1,414 @@
+---
+title: "seurat1000_noD_fibroblast"
+output: html_document
+date: "2024-09-02"
+---
+
+types of CAFs in "Cancer-associated fibroblast classification in single-cell and spatial proteomics data"
+-apCAF: antigen presenting (small)
+-dCAF: dividing (smallest), TUBA1B MKI67
+-hsp_tCAF: heat shock tumor (small)
+-iCAF: inflammatory (2nd highest), CD34
+-ifnCAF: interferon response (small), IL32 CXCL9/10/11, IDO1
+-mCAF: matrix,(largest) MMP11 COL1A2
+-Pericyte: (4th highest)
+-rCAF reticular-like (rare)
+-tCAF: tumor-like (small), MME TMEM158 VEGFA
+-vCAF: vascular (3rd highest) NOTCH, COL18A1, MCAM
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(SingleR)
+library(pals)
+library(ggpubr)
+library(rstatix)
+library(tidyverse)
+
+set.seed(42)
+```
+
+import seurat1000_noD
+```{r}
+seurat1000_noD <- readRDS("seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+seurat_fib <- readRDS("seurat1000_noD_fibroblast/seurat1000_noD_fibroblast_25dim15res.rds")
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD"="#43823D")
+#met_col <- c("Liver"="#B668A9", "Lung"="#8C7F94", "Omentum"="#C2D7EF", "Primary"="#750F2C","Bladder"="#750F2C", "Lymph"="#F8ADA7", "Adrenal"="#8DC63F")
+met_col <- c("Liver"="#B668A9", "Lung"="#63596D", "Primary"="#750F2C","Bladder"="#750F2C", "Other"="#C2D7EF", "LN"="#F8ADA7", "Lymph"="#F8ADA7", "Adrenal"="#bfef45", "Omentum"="#000075")
+fib_col <- unname(glasbey(10)) %>% setNames(sort(unique(seurat_fib@meta.data$caf.pred)))
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+# DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "cca_clusters", label=T)
+# DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "cell_type") + scale_color_manual(values=unname(trubetskoy()))
+# DimPlot(seurat1000_noD, reduction = "umap.cca", group.by = "hpca_subset") + scale_color_manual(values=unname(trubetskoy()))
+
+figs <- 'Figure4/Fibroblast/'
+wd <- 'seurat1000/seurat1000_noD_fibroblast/'
+sups <- 'Supplementary_Figures/Supplementary_Figure11-14_snRNAseq/panels/Fibroblast/'
+```
+
+### CLUSTER AND ANNOTATE ###
+
+filter to fibroblast (5,039 cells) & re-cluster
+```{r}
+#re-clustering
+seurat_fib <- subset(seurat1000_noD, subset=cell_type == "Fibroblasts")
+seurat_fib[["RNA"]] <- split(seurat_fib[["RNA"]], f = seurat_fib$batch)
+seurat_fib <- NormalizeData(seurat_fib) 
+seurat_fib <- FindVariableFeatures(seurat_fib) 
+seurat_fib = ScaleData(seurat_fib) 
+seurat_fib <- RunPCA(seurat_fib) 
+  
+#investigate dimensions
+ElbowPlot(seurat_fib, ndims = 50) + geom_hline(yintercept=2) #elbow ~23?
+DimHeatmap(seurat_fib, dims = 26:30, cells = 500, balanced = TRUE)
+PCA_use <- 25
+res_use <- 1.5
+
+#continue pipeline, finding clusters
+seurat_fib <- FindNeighbors(seurat_fib, dims = 1:PCA_use, reduction = "pca")
+seurat_fib <- FindClusters(seurat_fib, resolution = res_use, cluster.name = "unintegrated_clusters")
+seurat_fib <- RunUMAP(seurat_fib, dims = 1:PCA_use, reduction = "pca", reduction.name = "umap.unintegrated")
+#visualize umap (w/o batch correction)
+DimPlot(seurat_fib, reduction = "umap.unintegrated", group.by = "batch")
+DimPlot(seurat_fib, reduction = "umap.unintegrated", group.by = "sampleName")
+DimPlot(seurat_fib, reduction = "umap.unintegrated", group.by = "unintegrated_clusters")
+
+#batch correction
+seurat_fib <- IntegrateLayers(
+    object = seurat_fib, method = CCAIntegration,
+    orig.reduction = "pca", new.reduction = "integrated.cca"
+  )
+
+seurat_fib <- FindNeighbors(seurat_fib, reduction = "integrated.cca", dims = 1:PCA_use)
+seurat_fib <- FindClusters(seurat_fib, resolution = res_use, cluster.name = "fib_clusters")
+seurat_fib <- RunUMAP(seurat_fib, reduction = "integrated.cca", dims = 1:PCA_use, reduction.name = "umap.cca")
+
+#join layers for downstream (DEG)
+seurat_fib <- JoinLayers(seurat_fib)
+
+#save out
+saveRDS(seurat_fib, "seurat1000_noD_fibroblast/seurat1000_noD_fibroblast_25dim15res.rds")
+```
+
+
+
+### LIMITED ANNOTATION ###
+
+re-annotate using just i,m,r,vCAFs + Pericytes
+-remove apCAF, dCAF, hsp_tCAF, tCAF, ifnCAF
+-i,v,r,m + pericyte are the ones with >100 called (filtered)
+```{r}
+seurat_fib@meta.data %>%
+  select(caf.pred_higher_category) %>% table() %>% as.data.frame() %>% arrange(desc(Freq))
+
+fibs <- seurat_fib@meta.data %>%
+  select(apCAF1:vCAF10) %>%
+  select(iCAF4, mCAF6, Pericyte7, rCAF8, vCAF10) %>%
+  rownames_to_column("cell_id") %>%
+  rowwise() %>%
+  mutate(CAF_category_limited = which.max(across(iCAF4:vCAF10)), 
+         CAF_category_limited_max = case_match(CAF_category_limited,  1~iCAF4, 2~mCAF6, 3~Pericyte7, 4~rCAF8, 5~vCAF10),
+         CAF_category_limited = case_match(CAF_category_limited, 1~"iCAF", 2~"mCAF", 3~"Pericyte", 4~"rCAF", 5~"vCAF"), 
+         CAF_category_limited_filtered = case_when(CAF_category_limited_max<0.5~NA, .default = CAF_category_limited)) %>%
+  ungroup() %>%
+  as.data.frame()
+rownames(fibs) <- fibs$cell_id
+fibs <- fibs %>% select(CAF_category_limited, CAF_category_limited_max, CAF_category_limited_filtered)
+
+seurat_fib <- AddMetaData(seurat_fib, fibs)
+
+seurat_fib <- AddMetaData(seurat_fib, an_df)
+
+# DimPlot(seurat_fib, reduction = "umap.cca", group.by = "CAF_limited_byCluster") +
+#   scale_color_manual(values=fib_col)
+# ggsave(paste0(wd,"UMAP_CAF_limited_byCluster.tiff"), width=6, height=5, dpi=600)
+# DimPlot(seurat_fib, reduction = "umap.cca", group.by = "CAF_category_limited") +
+#   scale_color_manual(values=fib_col)
+# ggsave(paste0(wd,"UMAP_CAF_category_limited.tiff"), width=6, height=5, dpi=600)
+```
+
+### UMAPS ###
+
+make UMAPs
+```{r}
+#visualize
+DimPlot(seurat_fib, reduction="umap.cca", group.by = "fib_clusters", shuffle = T, label = T) +
+  scale_color_manual(values=unname(polychrome()))
+ggsave("seurat1000_noD_fibroblast/UMAP_fib_clusters.tiff", width=6, height=5, dpi=600)
+DimPlot(seurat_fib, reduction="umap.cca", group.by = "cell_type", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+ggsave("seurat1000_noD_fibroblast/UMAP_cell_type.tiff", width=6, height=5, dpi=600)
+DimPlot(seurat_fib, reduction="umap.cca", group.by = "hpca_subset", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+ggsave("seurat1000_noD_fibroblast/UMAP_hpca_subset.tiff", width=6, height=5, dpi=600)
+#DimPlot(seurat_fib, reduction="umap.cca", group.by = "hpca.main", shuffle = T) +
+#  scale_color_manual(values=unname(trubetskoy()))
+DimPlot(seurat_fib, reduction="umap.cca", group.by = "histology", shuffle = T) +
+  scale_color_manual(values=hist_col)
+ggsave("seurat1000_noD_fibroblast/UMAP_histology.tiff", width=5, height=4, dpi=600)
+ggsave(paste0(sups,"UMAP_histology.tiff"), width=5, height=4, dpi=600)
+DimPlot(seurat_fib, reduction="umap.cca", group.by = "sampleName", shuffle = T) +
+  scale_color_manual(values=unname(glasbey()))
+ggsave("seurat1000_noD_fibroblast/UMAP_sampleName.tiff", width=6, height=5, dpi=600)
+
+#fibroblast predictions
+DimPlot(seurat_fib, reduction="umap.cca", group.by = "caf.pred", shuffle = T) +
+  scale_color_manual(values=unname(glasbey()))
+ggsave("seurat1000_noD_fibroblast/UMAP_caf.pred.tiff", width=5, height=4, dpi=600)
+DimPlot(seurat_fib, reduction="umap.cca", group.by = "caf.pred_higher_category", shuffle = T) +
+  scale_color_manual(values=unname(glasbey()))
+FeaturePlot(seurat_fib, reduction = "umap.cca", features = c("apCAF1", "dCAF2", "hsp_tCAF3", "iCAF4", "ifnCAF5", "mCAF6", "Pericyte7", "rCAF8", "tCAF9", "vCAF10")) &
+  scale_color_gradientn(colors=magma(1000))
+DimPlot(seurat_fib, reduction = "umap.cca", group.by = "CAF_category_limited", shuffle = T) +
+  scale_color_manual(values=fib_col)
+ggsave(paste0(wd,"UMAP_caf.pred_top5.tiff"), width=5, height=4, dpi=600)
+ggsave(paste0(figs,"UMAP_caf.pred_top5.tiff"), width=5, height=4, dpi=600)
+DimPlot(seurat_fib, reduction = "umap.cca", group.by = "CAF_category_limited_filtered", shuffle = T) +
+  scale_color_manual(values=fib_col)
+
+#splitting with background
+umap_data <- Embeddings(seurat_fib, "umap.cca")
+meta_data <- seurat_fib@meta.data
+seurat_imm_df <- cbind(umap_data, meta_data)
+
+#facet wrap col must be selected out of grey geom_point
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=fib_clusters)) +
+  geom_point(data = seurat_imm_df %>% select(-fib_clusters), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~fib_clusters) +
+  scale_color_manual(values=unname(polychrome())) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=histology)) +
+  geom_point(data = seurat_imm_df %>% select(-sampleName), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~sampleName) +
+  scale_color_manual(values=hist_col) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=caf.pred)) +
+  geom_point(data = seurat_imm_df %>% select(-caf.pred), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~caf.pred) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+```
+
+
+### QUANTIFY FIB DISTRIBUTION ###
+
+stacked bar plots - by histology
+```{r}
+#main 5 fib types
+seurat_fib@meta.data %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD")), 
+         CAF_category_limited = factor(CAF_category_limited, levels=c("mCAF", "vCAF", "rCAF", "iCAF", "Pericyte"))) %>%
+  select(histology, CAF_category_limited) %>% table() %>% as.data.frame() %>%
+    ggplot(aes(x=histology, y=Freq, fill=CAF_category_limited)) +
+      geom_bar(stat="identity", position = "stack")+
+      scale_fill_manual(values=fib_col) 
+#ggsave(paste0(wd, "cafPred_top5_byHistology_stackbar.pdf"), width=4, height=4)
+#ggsave(paste0(figs, "cafPred_top5_byHistology_stackbar.pdf"), width=4, height=4)
+seurat_fib@meta.data %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD")), 
+         CAF_category_limited = factor(CAF_category_limited, levels=c("mCAF", "vCAF", "rCAF", "iCAF", "Pericyte"))) %>%
+  select(histology, CAF_category_limited) %>% table() %>% as.data.frame() %>%
+    ggplot(aes(x=histology, y=Freq, fill=CAF_category_limited)) +
+      geom_bar(stat="identity", position = "fill")+
+      scale_fill_manual(values=fib_col) 
+#ggsave(paste0(wd, "cafPred_top5_byHistology_fillbar.pdf"), width=4, height=4)
+#ggsave(paste0(figs, "cafPred_top5_byHistology_fillbar.pdf"), width=4, height=4)
+seurat_fib@meta.data %>%
+  select(CAF_category_limited, histology) %>%
+  table() %>% as.data.frame() %>%
+  left_join(seurat1000_noD@meta.data %>% group_by(histology) %>% summarise(n_cells=n())) %>%
+  mutate(prop = Freq/n_cells,
+         histology = factor(histology, levels=c("UC", "PUC", "UCSD")), 
+         CAF_category_limited = factor(CAF_category_limited, levels=c("mCAF", "vCAF", "rCAF", "iCAF", "Pericyte"))) %>%
+  ggplot(aes(x=histology, y=prop, fill=CAF_category_limited)) +
+    geom_bar(stat="identity", position = "stack")+
+    scale_fill_manual(values=fib_col) +
+    labs(x=NULL, y="Proportion of all cells")
+ggsave(paste0(wd, "cafPred_top5_byHistology_stackbar_propAllCells.pdf"), width=4, height=4)
+ggsave(paste0(figs, "cafPred_top5_byHistology_stackbar_propAllCells.pdf"), width=4, height=4)
+
+#get proportions
+seurat_fib@meta.data %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD")), 
+         CAF_category_limited = factor(CAF_category_limited, levels=c("mCAF", "vCAF", "rCAF", "iCAF", "Pericyte"))) %>%
+  select(histology, CAF_category_limited) %>% table() %>% as.data.frame() %>%
+  group_by(histology) %>% arrange(histology) %>%
+  mutate(total = sum(Freq)) %>% ungroup() %>%
+  mutate(percent = round(Freq/total*100,1))
+
+#fishers exact test
+m <- seurat_fib@meta.data %>%
+  mutate(histology = case_match(histology, "PUC"~"PUC", .default = "not_PUC"),
+         CAF = case_match(CAF_category_limited, "rCAF"~"rCAF", .default = "not_rCAF")) %>%
+  select(histology, CAF) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAF, values_from = Freq) %>%
+  select(-histology) %>%
+  as.matrix()
+fisher_test(m)
+```
+
+beta binomial test between CAFs
+```{r}
+library(glmmTMB)
+
+#beta binomial test?
+n_df <- seurat_fib@meta.data %>%
+  group_by(sampleName) %>%
+  summarise(total_cells = n())
+
+ann_df <- seurat1000_noD@meta.data %>%
+  select(sampleName, patient, histology, sex, met_site) %>%
+  distinct()
+
+test_df <- seurat_fib@meta.data %>%
+  select(sampleName, CAF_category_limited) %>%
+  table() %>% as.data.frame() %>%
+  rename(n_celltype = Freq) %>%
+  left_join(n_df) %>%
+  left_join(ann_df)
+
+#test each cell type separately (UC vs PUC + UCSD vs PUC)
+results <- list()
+for(celltype in unique(test_df$CAF_category_limited)){
+  df_subset <- test_df %>% filter(CAF_category_limited == celltype)
+  
+  model <- glmmTMB(n_celltype/total_cells ~ histology + (1|sampleName), 
+                   family = betabinomial, 
+                   weights = total_cells, 
+                   data = df_subset)
+  
+  results[[celltype]] <- summary(model)
+}
+
+#test each cell type separately (UC vs UCSD)
+results <- list()
+for(celltype in unique(test_df$CAF_category_limited)){
+  df_subset <- test_df %>% filter(CAF_category_limited == celltype, histology!="PUC")
+  
+  model <- glmmTMB(n_celltype/total_cells ~ histology + (1|sampleName), 
+                   family = betabinomial, 
+                   weights = total_cells, 
+                   data = df_subset)
+  
+  results[[celltype]] <- summary(model)
+}
+
+results[["iCAF"]] #UC vs PUC:0.002135, PUC vs UCSD:0.035229, UCSD vs UC: 0.122
+results[["mCAF"]] #UC vs PUC:0.9732, PUC vs UCSD:0.0295, UCSD vs UC: 0.00746
+results[["Pericyte"]] #UC vs PUC: 0.0647, PUC vs UCSD:0.6042, #UC vs UCSD: NaN
+results[["rCAF"]] #UC vs PUC: 0.6072, #PUC vs UCSD: 0.1891, #UC vs UCSD: 0.41152
+results[["vCAF"]] #UC vs PUC: 0.295, #PUC vs UCSD: 0.732, #UC vs UCSD: 0.211
+```
+
+stacked bar- each sample
+```{r}
+
+#top 5 types
+sample_order <- seurat_fib@meta.data %>% 
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  select(sampleName, histology, met_site) %>% distinct() %>% arrange(histology, met_site) %>% pull(sampleName)
+g <- seurat_fib@meta.data %>% 
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  select(sampleName, histology, met_site) %>% distinct() %>% arrange(histology, met_site) %>% group_by(histology) %>% summarise(n=n()) %>% pull(n) %>% cumsum()
+seurat_fib@meta.data %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD")), 
+         CAF_category_limited = factor(CAF_category_limited, levels=c("mCAF", "vCAF", "rCAF", "iCAF", "Pericyte")), 
+         sampleName = factor(sampleName, levels=sample_order)) %>%
+  ggplot(aes(x=sampleName, fill=CAF_category_limited)) +
+    geom_bar(stat="count", position = "fill")+
+    geom_tile(aes(x=sampleName, fill=histology, y=1.16), width=0.9, height=0.08, inherit.aes = F) +
+    geom_tile(aes(x=sampleName, fill=met_site, y=1.06), width=0.9, height=0.08, inherit.aes = F) +
+    geom_vline(xintercept = (g+0.5)[1:2]) +
+    scale_fill_manual(values=c(fib_col, hist_col, met_col), breaks=c(names(fib_col), names(met_col))) +
+    theme(axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) +
+    scale_y_continuous(breaks=seq(0,1,0.25)) +
+    labs(x=NULL, y="Proportion of fibroblasts", fill="Legend")
+ggsave(paste0(wd, "cafPred_top5_bySample_fillbar.pdf"), width=6, height=4)
+ggsave(paste0(sups, "cafPred_top5_bySample_fillbar.pdf"), width=6, height=4)
+```
+
+### MARKER EXPRESSION ###
+
+FAP expression
+```{r}
+FeaturePlot(seurat_fib, reduction = "umap.cca", features = "FAP")
+VlnPlot(seurat_fib, features = "FAP", group.by = "histology")
+
+
+DotPlot(seurat_fib, features = "FAP", group.by = "histology")
+
+#FAP expn in fibroblasts
+expn <- FetchData(seurat_fib, vars=c("FAP"))
+expn <- expn %>% rownames_to_column(var="cell_id") %>%
+  left_join(seurat_fib@meta.data %>% select(sampleName, histology, caf.pred) %>% rownames_to_column(var="cell_id")) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD")))
+stat.test <- expn %>%
+  t_test(FAP~histology) %>%
+  add_xy_position(step.increase = 0.2)
+expn %>% 
+  ggplot(aes(x=histology, y=FAP)) +
+    geom_violin(aes(fill=histology), show.legend = F) +
+    scale_fill_manual(values=hist_col) +
+    geom_hline(yintercept = 0.6) +
+    stat_pvalue_manual(stat.test, tip.length = 0)
+ggsave(paste0(wd,"FAP_byHistology.pdf"), width=3, height=3)
+expn %>%
+  group_by(histology) %>%
+  mutate(n_total=n()) %>%
+  filter(FAP>0.6) %>%
+  summarise(n_expressed = n(), 
+            n_total = unique(n_total)) %>%
+  mutate(percent_expressed = n_expressed/n_total, 
+         not_expressed = n_total-n_expressed) %>%
+  pivot_longer(cols=c(n_expressed, not_expressed), names_to = "expressed", values_to = "n_cells") %>%
+  mutate(expressed = factor(expressed, levels=c("not_expressed", "n_expressed")), 
+         histology = factor(histology, levels=c("UC", "PUC" , "UCSD"))) %>%
+  ggplot(aes(x=histology, y=n_cells, fill=expressed)) +
+    geom_bar(stat="identity", position = "stack") +
+    scale_fill_manual(values=c("snow2", "navy"), labels=c("FAP-", "FAP+")) +
+    #coord_flip() +
+    labs(x=NULL, y="# Fibroblasts", fill="FAP expression", caption="FAP expn > 0.6")
+ggsave(paste0(wd,"FAP_fibroblasts_barplot_vertical.pdf"), width=4, height=4)
+ggsave(paste0(sups,"FAP_fibroblasts_barplot_vertical.pdf"), width=4, height=4)
+
+#does FAP expression in fibroblasts correlate to SPP1 expression in macrophages for same sample?
+expn <- FetchData(seurat1000_noD, vars=c("FAP", "SPP1"))
+expn <- expn %>% rownames_to_column(var="cell_id") %>%
+  left_join(seurat1000_noD@meta.data %>% select(sampleName, histology, cell_type) %>% rownames_to_column(var="cell_id")) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  pivot_longer(cols=FAP:SPP1, names_to = "gene", values_to = "expn")
+df <- expn %>% 
+  group_by(sampleName, cell_type, gene) %>%
+  summarise(expn = mean(expn)) %>% ungroup()
+df <- bind_rows(df %>% filter(gene =="FAP", cell_type=="Fibroblasts"),
+                df %>% filter(gene =="SPP1", cell_type=="Macrophage")) %>%
+  select(sampleName, gene, expn) %>%
+  pivot_wider(names_from = "gene", values_from = "expn") %>%
+  left_join(seurat1000_noD@meta.data %>% distinct(sampleName, histology))
+df %>% 
+  ggplot(aes(x=FAP, y=SPP1)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(color=histology), size=3) +
+    #geom_text(aes(label=sampleName)) +
+    stat_cor(method="pearson") +
+    scale_color_manual(values=hist_col) +
+    labs(x="FAP expression in fibroblasts", y="SPP1 expression in macrophages", color="Histology", caption="pearson correlation")
+ggsave(paste0(wd,"FAP_SPP1_correlation.pdf"), width=5, height=4)
+```
+

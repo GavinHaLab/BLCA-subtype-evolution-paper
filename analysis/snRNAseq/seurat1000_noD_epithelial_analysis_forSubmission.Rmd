@@ -1,0 +1,1226 @@
+---
+title: "seurat1000_noD_epi_analysis"
+output: html_document
+date: "2024-08-15"
+---
+libraries
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(pals)
+library(viridis)
+library(enrichR)
+library(ggpubr)
+library(rstatix)
+library(som)
+library(consensusMIBC)
+library(eulerr)
+library(GSVA)
+library(entropy)
+library(circlize)
+library(ComplexHeatmap)
+library(patchwork)
+library(gridExtra)
+library(fgsea)
+library(msigdbr)
+library(tidyverse)
+
+set.seed(42)
+```
+
+import seurat objects
+```{r}
+seurat1000_noD <- readRDS("seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+seurat_ep <- readRDS("seurat1000/seurat1000_noD_epithelial_dim20res1.25_annotated.rds")
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD"="#43823D", "UC_UCSD"="#43823D", "UC-sarcomatoid" = "#D2BEA5", "SARC" = "#D2BEA5")
+mol_cols <- c("Ba/Sq"="#e6194b","Ba_Sq"="#e6194b", "LumU"="#4363d8", "LumP"="#ffe119", "Stroma-rich"="#f58231", "LumNS"="#3cb44b", "NE"="#911eb4", "NE-like"="#911eb4")
+samp_cols <- unname(glasbey())[1:15] %>% setNames(sort(unique(seurat1000_noD@meta.data$sampleName)))
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15_109','16_070','16_097','17_026','17_030','17_071','18_101','18_120','19_007','19_044','15_108','16_079','17_020','17_047','18_016','18_065','19_001','19_004','19_022','19_037'))
+pat_col2 <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+small_legend <- theme(
+  legend.text = element_text(size = 8),      
+  legend.title = element_text(size = 10),   
+  legend.key.size = unit(0.5, "cm")            
+)
+
+wd <- 'seurat1000/seurat1000_noD_epithelial_dim20res125/'
+figs <- 'Figure5/images/Epithelial/'
+sups <- 'Supplementary_Figure11-15_snRNAseq/panels/Epithelial/'
+```
+
+### UMAPS ###
+visualize basic UMAPs
+```{r}
+#overall metadata
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "ep_clusters", shuffle = T, label = T, alpha=0.7) + 
+  scale_color_manual(values=unname(glasbey())) +
+  theme(legend.position = "none")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_ep_clusters.pdf", width=6, height=5)
+ggsave(paste0(sups,"UMAP_ep_clusters.tiff"), width=4, height=4, dpi=600)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "batch", shuffle = T, alpha=0.7)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_batch.tiff", width=6, height=5)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "sex", shuffle = T, alpha=0.7)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_sex.tiff", width=6, height=5)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "sampleName", shuffle = T, alpha=0.7) + 
+  scale_color_manual(values=unname(glasbey())) +
+  theme(legend.position = "none")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_sampleName.pdf", width=4, height=4)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_sampleName_nolegend.tiff", width=4, height=4, dpi=600)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "patient", shuffle = T, alpha=0.7) + 
+  scale_color_manual(values=unname(glasbey()))
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_patient.tiff", width=6, height=5)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "bulk_MIBC", shuffle = T, alpha=0.7) + 
+  scale_color_manual(values=unname(trubetskoy()))
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_bulk_MIBC.tiff", width=6, height=5)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "hpca_subset", shuffle = T, alpha=0.7) + 
+  scale_color_manual(values=unname(glasbey()))
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_hpca_subset.tiff", width=6, height=5)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "met_site", shuffle = T, alpha=0.7) + 
+  scale_color_manual(values=unname(trubetskoy()))
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_met_site.tiff", width=6, height=5)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "histology", shuffle = T, alpha=0.7) + 
+  scale_color_manual(values=hist_col) +
+  theme(legend.position = "none")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_histology.pdf", width=4, height=4)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_histology_nolegend.tiff", width=4, height=4, dpi=600)
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "Ep_Hist", shuffle = T, alpha=0.7) + 
+  scale_color_manual(values=c("#84C2EB","#43823D","#815CA6")) +
+  theme(legend.position = "none")
+ggsave(paste0(wd,"UMAP_EpHist.tiff"), width=6, height=5)
+ggsave(paste0(sups,"UMAP_EpHist.tiff"), width=4, height=4, dpi=600)
+
+DimPlot(seurat_ep, reduction = "umap.cca", label = F, group.by = "bulk_MIBC", alpha=0.5) +
+  scale_color_manual(values=mol_cols)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_bulkMIBC.tiff", width=6, height=5)
+
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "CCP1") + 
+  scale_color_gradientn(colors=magma(1000)) 
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_CCP_nolegend.pdf", width=6, height=5)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_CCP.tiff", width=4, height=4, dpi=600)
+
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "log10nCount") + 
+  scale_color_gradientn(colors=magma(1000))
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_log10nCount.tiff", width=6, height=5)
+```
+
+UMAPs split with background
+```{r}
+#splitting with background
+umap_data <- Embeddings(seurat_ep, "umap.cca")
+meta_data <- seurat_ep@meta.data
+seurat_ep_df <- cbind(umap_data, meta_data)
+
+ggplot(seurat_ep_df, aes(x = umapcca_1, y = umapcca_2, color = ep_clusters)) +
+  geom_point(data = seurat_ep_df %>% select(-ep_clusters), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~ep_clusters) +
+  scale_color_manual(values=unname(glasbey())) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_ep_clusters_split.tiff", width=8, height=6)
+
+ggplot(seurat_ep_df, aes(x = umapcca_1, y = umapcca_2, color = sampleName)) +
+  geom_point(data = seurat_ep_df %>% select(-sampleName), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~sampleName) +
+  scale_color_manual(values=unname(glasbey())) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_sampleName_split.tiff", width=8, height=6)
+```
+
+markers on UMAPs
+```{r}
+#specific markers
+##Luminal: UPK3A, UPK1A, UPK1B, UPK2, UPK3B, KRT18, KRT20, PPARG, FOXA1, GATA3
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "UPK2")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_UPK2.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT18")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_KRT18.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "PPARG")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_PPARG.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "GATA3")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_GATA3.tiff", width=6, height=5)
+
+##Basal: TP63, KRT5, KRT6A, KRT17, KRT14, CDH3, KRT19, KRT13, CD44
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "TP63")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_TP63.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT5")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_KRT5.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT6A")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_KRT6A.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "KRT13")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_KRT13.tiff", width=6, height=5)
+
+##down in PUC: CDH1
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "CDH1")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_CDH1.tiff", width=6, height=5)
+
+##up in PUC: SNAI1, TGFB2, ERBB2, SDC1
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "SNAI1")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_SNAI1.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "TGFB2")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_TGFB2.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "ERBB2")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_ERBB2.tiff", width=6, height=5)
+
+##up in LumP/UC: FGFR3
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "FGFR3")
+  ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_FGFR3.tiff", width=6, height=5)
+  
+#random other questions
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "CCNE1")
+FeaturePlot(seurat_ep, reduction="umap.cca", features = "NTRK1")
+```
+
+### DEG in snRNAseq ###
+
+DEGs by histology
+```{r}
+PUCnb <- c("19_007K3" ,"19_007D5" ,"18_120L1")
+
+#PUC samples, without bridges (17-071/15-109)
+PUCnbvsOther_hist <- FindMarkers(seurat_ep, group.by = "sampleName", ident.1 = PUCnb) %>%
+  rownames_to_column(var="Gene") %>%
+  mutate(percent_diff = pct.1-pct.2)
+PUC_genesnb <- PUCnbvsOther_hist %>% filter(avg_log2FC>1, percent_diff>0.1, p_val_adj<0.01) %>% pull(Gene)
+PUC_genesnb_down <- PUCnbvsOther_hist %>% filter(avg_log2FC< -1, percent_diff< -0.1, p_val_adj<0.01) %>% pull(Gene)
+
+SQvsOther_hist <- FindMarkers(seurat_ep, group.by = "histology", ident.1 = "UCSD") %>%
+  rownames_to_column(var="Gene") %>%
+  mutate(percent_diff = pct.1-pct.2)
+SQ_genes2 <- SQvsOther_hist %>% filter(avg_log2FC>1, percent_diff>0.1, p_val_adj<0.01) %>% pull(Gene) #381/770 overlap with SQ_genes (740)
+SQ_genes2_down <- SQvsOther_hist %>% filter(avg_log2FC< -1, percent_diff< -0.1, p_val_adj<0.01) %>% pull(Gene)
+```
+
+FGSEA - set up
+```{r}
+set.seed(42)
+
+### PUC - HISTOLOGY NO BRIDGES ### 
+
+#set up ranking
+minp <- PUCnbvsOther_hist %>% filter(p_val_adj>0) %>% pull(p_val_adj) %>% min()
+PUC_rank <- PUCnbvsOther_hist %>%
+  mutate(p_val_adj = case_when(p_val_adj==0~ (minp/2), .default = p_val_adj)) %>%
+  mutate(rank_metric_basic = sign(avg_log2FC)* -log10(p_val_adj), #don't use! have a LOT of padj=0, which are all ranked equivalently here if you don't consider FC/pct
+         rank_metric_FC = avg_log2FC* -log10(p_val_adj), 
+         rank_metric_pct = sign(avg_log2FC)* -log10(p_val_adj)*abs(percent_diff), #don't use? follows almost same ranking as basic, 
+         rank_metric_FC_pct = avg_log2FC* -log10(p_val_adj)*abs(percent_diff), #I like this one the best I think
+         basic_rank = rank(desc(rank_metric_basic), ties.method = "first"), 
+         FC_rank = rank(desc(rank_metric_FC), ties.method = "first"), 
+         pct_rank = rank(desc(rank_metric_pct), ties.method = "first"),
+         FC_pct_rank = rank(desc(rank_metric_FC_pct), ties.method = "first")) %>%
+  arrange(desc(rank_metric_basic))
+PUC_vec <- deframe(PUC_rank[, c("Gene", "rank_metric_FC_pct")])
+
+#load gene sets
+msigdbr_data <- msigdbr(species = "Homo sapiens", category = "H")
+pathways_hallmark <- split(msigdbr_data$gene_symbol, msigdbr_data$gs_name)
+
+#perform fgsea
+set.seed(42)
+PUCnb_fgsea <- fgsea(pathways = pathways_hallmark, 
+                       stats = PUC_vec, 
+                       minSize = 15,  # Min genes per pathway
+                       #nperm = 10000,
+                       maxSize = 500) # Max genes per pathway
+PUCnb_fgsea <- PUCnb_fgsea %>% arrange(desc(NES))
+
+
+### SQ - HISTOLOGY ### 
+
+#set up ranking
+minp <- SQvsOther_hist %>% filter(p_val_adj>0) %>% pull(p_val_adj) %>% min()
+SQ_rank <- SQvsOther_hist %>%
+  mutate(p_val_adj = case_when(p_val_adj==0~ (minp/2), .default = p_val_adj)) %>%
+  mutate(rank_metric_basic = sign(avg_log2FC)* -log10(p_val_adj), #don't use! have a LOT of padj=0, which are all ranked equivalently here if you don't consider FC/pct
+         rank_metric_FC = avg_log2FC* -log10(p_val_adj), 
+         rank_metric_pct = sign(avg_log2FC)* -log10(p_val_adj)*abs(percent_diff), #don't use? follows almost same ranking as basic, 
+         rank_metric_FC_pct = avg_log2FC* -log10(p_val_adj)*abs(percent_diff), #I like this one the best I think
+         basic_rank = rank(desc(rank_metric_basic), ties.method = "first"), 
+         FC_rank = rank(desc(rank_metric_FC), ties.method = "first"), 
+         pct_rank = rank(desc(rank_metric_pct), ties.method = "first"),
+         FC_pct_rank = rank(desc(rank_metric_FC_pct), ties.method = "first")) %>%
+  arrange(desc(rank_metric_basic))
+SQ_vec <- deframe(SQ_rank[, c("Gene", "rank_metric_FC_pct")])
+
+#load gene sets
+msigdbr_data <- msigdbr(species = "Homo sapiens", category = "H")
+pathways_hallmark <- split(msigdbr_data$gene_symbol, msigdbr_data$gs_name)
+
+#perform fgsea
+set.seed(42)
+SQhist_fgsea <- fgsea(pathways = pathways_hallmark, 
+                       stats = SQ_vec, 
+                       minSize = 15,  # Min genes per pathway
+                       maxSize = 500) # Max genes per pathway)
+SQhist_fgsea <- SQhist_fgsea %>% arrange(desc(NES))
+
+#write out
+#write.csv(PUCnb_fgsea %>% mutate(leadingEdge = as.character(leadingEdge)), paste0(wd, "fGSEA/PUChistNoBridgevsOther_snRNAseq_fGSEA_results.csv"), row.names = F)
+#write.csv(SQhist_fgsea %>% mutate(leadingEdge = as.character(leadingEdge)), paste0(wd, "fGSEA/UCSDhistvsOther_snRNAseq_fGSEA_results.csv"), row.names = F)
+```
+
+FGSEA by HISTOLOGY - graphing
+```{r}
+## PUC, samples by histology, no bridges
+PUCnb_fgsea %>% 
+  filter(pval<0.05) %>%
+  ggplot(aes(x=NES, y=reorder(pathway, NES))) +
+    geom_col(aes(fill = NES)) +
+    scale_fill_gradient2(low="maroon", mid="snow", high="forestgreen") +
+    border() +
+    theme(legend.key = element_rect(color = NA)) +
+    labs(x="Normalized Enrichment Score", y=NULL, title="PUC vs other FGSEA", caption="pval<0.05 (no padj<0.05)")
+
+p_PUCnb <- PUCnb_fgsea %>% 
+  filter(pval<0.05) %>%
+  ggplot(aes(x=NES, y=reorder(pathway, NES))) +
+    #geom_segment(aes(x=0, xend=NES, y=pathway, yend=pathway, color=NES>0), linewidth=0.5) +
+    geom_segment(aes(x=0, xend=NES, y=pathway, yend=pathway)) +
+    geom_point(aes(fill = -log10(pval)), shape=21, size=5) +
+    geom_vline(xintercept = 0) +
+    #theme(axis.line = element_blank(), axis.ticks = element_blank()) +
+    border() +
+    theme(legend.key = element_rect(color = NA)) +
+    scale_fill_gradientn(colors=viridis(100)[25:100]) +
+    #scale_color_manual(values=c("maroon", "forestgreen")) +
+    labs(x="Normalized Enrichment Score", y=NULL, title="FGSEA: PUC hist (no bridges) vs Other", caption="pval<0.05 (no padj<0.05)", size="NES")
+p_PUCnb
+ggsave(paste0(wd, "fGSEA/PUChistNB_pathways_ballstick.pdf"), plot=p_PUCnb, width=7, height=3)
+ggsave(paste0(figs, "fGSEA/PUChistNB_pathways_ballstick.pdf"), plot=p_PUCnb, width=7, height=3)
+
+p_all <- list()
+for(s in PUCnb_fgsea %>% filter(pval<0.05) %>% pull(pathway)){
+  p <- plotEnrichment(pathways_hallmark[[s]], PUC_vec) +
+    labs(title = paste0("PUC Enrichment Plot:\n", s)) +
+    theme(title = element_text(size=6))
+  print(p)
+  p_all[[s]] <- p
+}
+pdf(paste0(wd, "fGSEA/PUChistNB_fGSEA_enrichment_plots.pdf"), width = 7, height = 8)
+grid.arrange(grobs = p_all, ncol = 2)  
+dev.off()
+
+## UCSD, samples by histology
+SQhist_fgsea %>% 
+  filter(padj<0.05) %>%
+  arrange(desc(NES)) %>% slice_head(n=6) %>%
+  ggplot(aes(x=NES, y=reorder(pathway, NES))) +
+    geom_col(aes(fill = NES)) +
+    scale_fill_gradient2(low="maroon", mid="snow", high="forestgreen") +
+    border() +
+    theme(legend.key = element_rect(color = NA)) +
+    labs(x="Normalized Enrichment Score", y=NULL, title="UCSD hist vs other FGSEA", caption="padj<0.05, top 6 by NES")
+
+p_UCSDhist <- SQhist_fgsea %>% 
+  filter(padj<0.05) %>%
+  arrange(desc(NES)) %>% slice_head(n=6) %>%
+  ggplot(aes(x=NES, y=reorder(pathway, NES))) +
+    geom_segment(aes(x=0, xend=NES, y=pathway, yend=pathway)) +
+    geom_point(aes(fill = -log10(pval)), shape=21, size=5) +
+    geom_vline(xintercept = 0) +
+    border() +
+    theme(legend.key = element_rect(color = NA)) +
+    scale_fill_gradientn(colors=viridis(100)[25:100]) +
+    scale_x_continuous(limits = c(0,1.7), expand = c(0,0)) +
+    labs(x="Normalized Enrichment Score", y=NULL, title="FGSEA: UCSD hist vs Other", caption="padj<0.05, top 6 by NES", size="NES")
+p_UCSDhist
+ggsave(paste0(wd, "fGSEA/UCSDhist_pathways_ballstick.pdf"), plot=p_UCSDhist, width=7, height=3)
+ggsave(paste0(figs, "fGSEA/UCSDhist_pathways_ballstick.pdf"), plot=p_UCSDhist, width=7, height=3)
+
+p_all <- list()
+for(s in SQhist_fgsea %>% filter(padj<0.05) %>% pull(pathway)){
+  p <- plotEnrichment(pathways_hallmark[[s]], PUC_vec) +
+    labs(title = paste0("UCSD Enrichment Plot:\n", s)) +
+    theme(title = element_text(size=6))
+  print(p)
+  p_all[[s]] <- p
+}
+pdf(paste0(wd, "fGSEA/UCSDhist_fGSEA_enrichment_plots.pdf"), width = 7, height = 8)
+grid.arrange(grobs = p_all, ncol = 2)  
+dev.off()
+
+#arrange both together
+p_PUCnb <- PUCnb_fgsea %>% 
+  filter(pval<0.05) %>%
+  ggplot(aes(x=NES, y=reorder(pathway, NES))) +
+    geom_segment(aes(x=0, xend=NES, y=pathway, yend=pathway)) +
+    geom_point(aes(fill = -log10(pval)), shape=21, size=5) +
+    geom_vline(xintercept = 0) +
+    border() +
+    theme(legend.key = element_rect(color = NA)) +
+    scale_fill_gradientn(colors=viridis(100)[25:100], limits=c(1.25,6.1), breaks=c(-log10(0.05), 2,4,6), labels=c(0.05,0.01, 0.0001, 0.000001), name="pvalue") +
+    labs(x="Normalized Enrichment Score", y=NULL, title="FGSEA: PUC hist (no bridges) vs Other")
+p_PUCnb
+p_UCSDhist <- SQhist_fgsea %>% 
+  filter(padj<0.05) %>%
+  arrange(desc(NES)) %>% slice_head(n=6) %>%
+  ggplot(aes(x=NES, y=reorder(pathway, NES))) +
+    geom_segment(aes(x=0, xend=NES, y=pathway, yend=pathway)) +
+    geom_point(aes(fill = -log10(pval)), shape=21, size=5) +
+    geom_vline(xintercept = 0) +
+    border() +
+    theme(legend.key = element_rect(color = NA)) +
+    scale_fill_gradientn(colors=viridis(100)[25:100], limits=c(1.25,6.1), breaks=c(-log10(0.05), 2,4,6), labels=c(0.05,0.01, 0.0001, 0.000001), name="pvalue") +
+    scale_x_continuous(limits = c(0,1.7), expand = c(0,0)) +
+    labs(x="Normalized Enrichment Score", y=NULL, title="FGSEA: UCSD hist vs Other")
+p_UCSDhist
+ggarrange(p_PUCnb, p_UCSDhist, nrow=2, common.legend = T, align="v", legend="right", heights=c(9,9))
+ggsave(paste0(wd, "fGSEA/PUChistNB-UCSDhist_pathways_ballstick.pdf"), width=7, height=6)
+ggsave(paste0(figs, "fGSEA/PUChistNB-UCSDhist_pathways_ballstick.pdf"), width=7, height=6)
+```
+
+FGSEA - top genes
+```{r}
+#get genes
+SQ_leading_genes <- SQhist_fgsea %>% filter(padj<0.05) %>% pull(leadingEdge)
+SQ_leading_genes
+
+PUC_leading_genes <- PUCnb_fgsea %>% filter(pval<0.05) %>% pull(leadingEdge)
+PUC_leading_genes
+
+leading_genes <- data.frame()
+for(i in 1:length(PUC_leading_genes)){
+  vec <- PUC_leading_genes[[i]]
+  pathway <- filter(PUCnb_fgsea, pval<0.05)[i]$pathway
+  df <- data.frame(pathway=rep(pathway, length(vec)), gene = vec, comparison= "PUCvsOther")
+  leading_genes <- rbind(leading_genes, df)
+}
+for(i in 1:length(SQ_leading_genes)){
+  vec <- SQ_leading_genes[[i]]
+  pathway <- filter(SQhist_fgsea, padj<0.1)[i]$pathway
+  df <- data.frame(pathway=rep(pathway, length(vec)), gene = vec, comparison= "UCSDvsOther")
+  leading_genes <- rbind(leading_genes, df)
+}
+
+leading_genes %>% filter(comparison=="UCSDvsOther") %>%
+  arrange(gene) %>%
+  group_by(gene) %>%
+  mutate(n_pathway=n()) %>% ungroup() %>%
+  filter(n_pathway>1) %>%
+  arrange(desc(n_pathway), gene)
+
+#write.csv(leading_genes, paste0(wd, "fGSEA/leading_edge_genes_byHist.csv"), row.names = F)
+
+E2F <- unique(filter(leading_genes, comparison=="PUCvsOther", pathway == "HALLMARK_E2F_TARGETS")$gene)
+OxPhos<- unique(filter(leading_genes, comparison=="PUCvsOther", pathway == "HALLMARK_OXIDATIVE_PHOSPHORYLATION")$gene)
+#MYC<- unique(filter(leading_genes, comparison=="PUCvsOther", pathway == "HALLMARK_MYC_TARGETS_V1")$gene)
+DNARepair<- unique(filter(leading_genes, comparison=="PUCvsOther", pathway == "HALLMARK_DNA_REPAIR")$gene)
+MTOR<- unique(filter(leading_genes, comparison=="PUCvsOther", pathway == "HALLMARK_MTORC1_SIGNALING")$gene)
+WNT<- unique(filter(leading_genes, comparison=="PUCvsOther", pathway == "HALLMARK_WNT_BETA_CATENIN_SIGNALING")$gene)
+TGFB<- unique(filter(leading_genes, comparison=="PUCvsOther", pathway == "HALLMARK_TGF_BETA_SIGNALING")$gene)
+
+
+Hypox <- unique(filter(leading_genes, comparison=="UCSDvsOther", pathway == "HALLMARK_HYPOXIA")$gene) 
+EMT <- unique(filter(leading_genes, comparison=="UCSDvsOther", pathway == "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION")$gene) 
+TNFA <- unique(filter(leading_genes, comparison=="UCSDvsOther", pathway == "HALLMARK_TNFA_SIGNALING_VIA_NFKB")$gene)
+Inflam <- unique(filter(leading_genes, comparison=="UCSDvsOther", pathway == "HALLMARK_INFLAMMATORY_RESPONSE")$gene)
+IFA <- unique(filter(leading_genes, comparison=="UCSDvsOther", pathway == "HALLMARK_INTERFERON_ALPHA_RESPONSE")$gene)
+UPR <- unique(filter(leading_genes, comparison=="UCSDvsOther", pathway == "HALLMARK_UNFOLDED_PROTEIN_RESPONSE")$gene)
+AJ <- unique(filter(leading_genes, comparison=="UCSDvsOther", pathway == "HALLMARK_APICAL_JUNCTION")$gene)
+```
+
+FGSEA - get full pathways
+```{r}
+E2F_full <- unique(pathways_hallmark$HALLMARK_E2F_TARGETS) #200 genes
+G2M_full <- unique(pathways_hallmark$HALLMARK_G2M_CHECKPOINT) #200 genes
+DNARepair_full <- unique(pathways_hallmark$HALLMARK_DNA_REPAIR) #150 genes
+OxPhos_full <- unique(pathways_hallmark$HALLMARK_OXIDATIVE_PHOSPHORYLATION)
+MTOR_full <- unique(pathways_hallmark$HALLMARK_MTORC1_SIGNALING)
+TGFB_full <- unique(pathways_hallmark$HALLMARK_TGF_BETA_SIGNALING)
+WNT_full <- unique(pathways_hallmark$HALLMARK_WNT_BETA_CATENIN_SIGNALING)
+
+Hypox_full <- unique(pathways_hallmark$HALLMARK_HYPOXIA)
+EMT_full <- unique(pathways_hallmark$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION)
+TNFA_full <- unique(pathways_hallmark$HALLMARK_TNFA_SIGNALING_VIA_NFKB)
+P53_full <- unique(pathways_hallmark$HALLMARK_P53_PATHWAY)
+IL6_full <- unique(pathways_hallmark$HALLMARK_IL6_JAK_STAT3_SIGNALING)
+Inflam_full <- unique(pathways_hallmark$HALLMARK_INFLAMMATORY_RESPONSE)
+AJ_full <- unique(pathways_hallmark$HALLMARK_APICAL_JUNCTION)
+IL2_full <- unique(pathways_hallmark$HALLMARK_IL2_STAT5_SIGNALING)
+Glyc_full <- unique(pathways_hallmark$HALLMARK_GLYCOLYSIS)
+
+#mostly non-overlapping
+length(intersect(E2F_full, G2M_full)) #73
+length(intersect(E2F_full, DNARepair_full)) #15
+length(intersect(G2M_full, DNARepair_full)) #2
+
+length(intersect(IL6_full, Inflam_full)) #23
+```
+
+UMAP for hist groupings
+```{r}
+df <- seurat_ep@meta.data %>%
+  mutate(DEG_hist = case_when(sampleName %in% PUCnb~"PUC", histology=="UCSD"~"UCSD", .default="Other")) %>%
+  select(DEG_hist)
+
+seurat_ep <- AddMetaData(seurat_ep, df)
+
+DimPlot(seurat_ep, reduction="umap.cca", group.by="DEG_hist", shuffle = T) + scale_color_manual(values=hist_col, na.value = "snow3") + theme(legend.position = "none")
+ggsave(paste0(wd, "UMAP_DEG_byHist.tiff"), width=4, height=4, dpi=600)
+ggsave(paste0(figs, "UMAP_DEG_byHist.tiff"), width=4, height=4, dpi=600)
+```
+
+
+### PATHWAY SCORES ###
+
+Fanconi Anemia score in snRNAseq
+```{r}
+FA <- c("BRCA2", "FANCD2","BRCA1", "FANCI", "RAD51", "RAD51C", "FANCA", "FANCC", "FANCE", "FANCF", "FANCG")
+seurat_ep <- AddModuleScore(seurat_ep, features = list(FA), name="FA")
+
+#UMAPS (FA + CCP)
+FeaturePlot(seurat_ep, reduction = "umap.cca", features  = c("FA1"), alpha=0.5) +
+  scale_color_gradientn(colors=brewer.ylgnbu(1000)) +
+  labs(title="FA 11 gene")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_FA_Score.tiff", width=6, height=5)
+
+FeaturePlot(seurat_ep, reduction = "umap.cca", features  = c("CCP1"), alpha=0.5) +
+  scale_color_gradientn(colors=brewer.ylgnbu(1000))
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_CCP_2.tiff", width=6, height=5)
+
+FeaturePlot(seurat_ep, reduction = "umap.cca", features  = c("FA1", "CCP1"), alpha=0.5, blend=T)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_FA_CCP_blend.tiff", width=14, height=5)
+
+#violin plot
+stat.test <- seurat_ep@meta.data %>%
+  mutate(histology = factor(histology, levels=c("UC","UCSD", "PUC"))) %>%
+  t_test(FA1~histology) %>%
+  add_xy_position()
+seurat_ep@meta.data %>%
+  mutate(histology = factor(histology, levels=c("UC","UCSD", "PUC"))) %>%
+  ggplot(aes(x=histology, y=FA1)) +
+    geom_violin(aes(fill=histology), show.legend = F) +
+    geom_boxplot(alpha=0.7, outlier.shape = NA, width=0.2) +
+    scale_fill_manual(values=hist_col) +
+    stat_pvalue_manual(stat.test) +
+    labs(x=NULL, y="FA Pathway Score")
+
+#boxplot (one point each tumor)
+df <- seurat_ep@meta.data %>%
+  group_by(sampleName) %>%
+  summarise(FA_avg = mean(FA1), 
+            histology = unique(histology), 
+            patient = unique(patient)) %>%
+  mutate(histology = factor(histology, levels=c("UC","UCSD", "PUC")))
+stat.test <- df %>%
+  wilcox_test(FA_avg~histology, ref.group = "PUC") %>%
+  add_xy_position(step.increase = 0.05)
+df %>%
+  ggplot(aes(x=histology, y=FA_avg)) +
+    geom_boxplot(aes(fill=histology), outlier.shape = NA, show.legend = F) +
+    geom_jitter(aes(color=patient), width=0.25, height=0, size=4, alpha=0.8, shape=16) +
+    scale_fill_manual(values=hist_col) +
+    scale_color_manual(values=pat_col) +
+    stat_pvalue_manual(stat.test, label="p", tip.length = 0.01) +
+    labs(x=NULL, y="Avg FA Score\n(per tumor)", color="Patient", caption="wilcox test unadj p-val")
+ggsave(paste0(wd, "FA_score_boxplot.pdf"), width=4, height=4)
+ggsave(paste0(sups, "FA_score_boxplot.pdf"), width=4, height=4)
+    
+
+#proportion of high expressing cells
+df2 <- seurat_ep@meta.data %>%
+  select(histology, FA1) %>%
+  group_by(histology) %>%
+  mutate(total_n=n()) %>%
+  filter(FA1>0) %>%
+  summarise(total_n = unique(total_n), 
+            n_over0 = n()) %>%
+  mutate(n_under0 = total_n - n_over0, 
+         prop_over0 = n_over0/total_n) 
+df3 <- df2 %>%
+  select(histology, n_over0, n_under0) %>%
+  pivot_longer(cols = n_over0:n_under0, names_to = "high_low", values_to = "n_cells_highlow") %>%
+  mutate(high_low = factor(high_low, levels=c("n_under0", "n_over0")), 
+         histology = factor(histology, levels=c("UC","UCSD", "PUC"))) 
+mat1 <- df2 %>%
+  select(histology, n_over0, n_under0) %>%
+  as.data.frame()
+rownames(mat1) <- mat1$histology
+mat1$histology <- NULL
+chisq_test(mat1[1:2,]) #PUC vs UC: p=1.06e-314	
+chisq_test(mat1[c(1,3),]) #PUC vs UCSD: p=0
+df3 %>%
+  ggplot(aes(x=histology, y=n_cells_highlow, fill=high_low)) +
+    geom_bar(stat="identity", position = "fill") +
+    scale_fill_manual(values=c("snow2", "orange2")) +
+    labs(x=NULL, y="Proportion of cells FA > 0", caption="chisq test p<1e-10 for PUC vs UC, PUC vs UCSD")
+```
+
+### BULK RNASEQ ###
+
+import bulk UW TAN rnaseq
+```{r}
+#basic files
+vst <- read_delim("bulk_rnaseq/uw_tan_counts/ComBatseq_VST_91samples_19712genes_2_17_2023.txt", delim="\t", show_col_types = F)
+
+#annotation 
+sample_info <- read.csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv')
+
+
+#clean up vst file as "rnaseq_vst"
+rnaseq_vst <- vst %>% pivot_longer(cols= -gene, 
+                                  names_to = "sample", 
+                                  values_to = "vst") %>%
+  mutate(patient = substr(sample, 1, 6)) %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, hist_sample, hist_patient, rnaseq_bad), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(rnaseq_bad=="good")
+
+#make matrices (good rnaseq samples, no sarcomatoid)
+vst_mat <- vst %>% pivot_longer(cols=-gene, names_to = "sample", values_to = "vst") %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, rnaseq_bad, hist_sample), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(rnaseq_bad=="good", hist_sample %in% c("UC", "PUC", "UCSD", "NE")) %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst) %>% as.data.frame()
+rownames(vst_mat) <- vst_mat$gene
+vst_mat$gene <- NULL
+vst_mat <- as.matrix(vst_mat)
+```
+
+individual genes in bulk rnaseq
+```{r}
+stat.test <- rnaseq_vst %>%
+  filter(gene == "HES1") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  t_test(vst~hist_patient, p.adjust.method = "fdr") %>%
+  add_xy_position(step.increase = 0.08)
+rnaseq_vst %>% 
+  filter(gene == "HES1") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  ggplot(aes(x=hist_patient, y=vst)) +
+    geom_boxplot(aes(fill=hist_patient), outlier.shape=NA, show.legend = F) +
+    geom_jitter(aes(color=patient), size=2, height=0, width=0.2) +
+    scale_color_manual(values=pat_col2) +
+    scale_fill_manual(values=hist_col) +
+    guides(color=guide_legend(ncol=2)) +
+    stat_pvalue_manual(stat.test, hide.ns = "p.adj", label = "p.adj.signif", tip.length = 0) +
+    scale_y_continuous(breaks=seq(6,12,2)) +
+    labs(x="Histology (Patient-Level)", y="Expression (vst)", color="Patient")
+ggsave('Figure7/raw_images/HES1_expn_bulkRNAseq_vst.pdf', width=6, height=4)
+```
+
+GSVA scores bulk RNAseq
+-using leading genes from fGSEA
+```{r}
+#rnaseq into matrix form: samples as cols, genes as rows
+genes <- rnaseq_vst %>% select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst) %>% pull(gene)
+rnaseq_M <- rnaseq_vst %>% 
+  filter(rnaseq_bad=="good") %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst) %>% select(-gene)
+rnaseq_M <- as.matrix(rnaseq_M)
+rownames(rnaseq_M) <- genes
+
+#run GSVA
+unique(leading_genes$pathway)
+
+gsvaPar <- gsvaParam(rnaseq_M, list(E2F = E2F[1:25],
+                                    OxPhos = OxPhos[1:25], 
+                                    DNARepair = DNARepair[1:25],
+                                    MTOR = MTOR[1:25],
+                                    WNT = WNT[1:25], 
+                                    TGFB = TGFB[1:25],
+                                    
+                                    Hypox = Hypox[1:25],
+                                    EMT=EMT[1:25],
+                                    TNFA =TNFA[1:25],
+                                    Inflam =Inflam[1:25],
+                                    InterferonA = IFA[1:25],
+                                    UPR = UPR[1:25], 
+                                    AJ = AJ[1:25]))
+gsva.es <- gsva(gsvaPar, verbose=F)
+gsva_df <- as.data.frame(gsva.es) %>% t() %>% as.data.frame() %>%
+  rownames_to_column(var="sample") %>%
+  pivot_longer(cols=-sample, names_to = "pathway", values_to = "GSVA") %>%
+  mutate(Patient = substr(sample, 1,6)) %>%
+  left_join(sample_info %>% select(rnaseq_sampleName,  hist_patient, rnaseq_bad, hist_sample), by = c("sample"= "rnaseq_sampleName")) 
+
+#write.csv(gsva_df, paste0(wd, "fGSEA/bulkRNAseq_GSVAscores_fGSEAbyHist.csv"), row.names = F)
+
+#graph
+##every tumor PUC (leading edge)
+stat.test <- gsva_df %>%
+  filter(hist_sample %in% c("UC", "PUC", "UCSD")) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC"))) %>%
+  filter(pathway %in% c("E2F", "DNARepair", "TGFB", "MTOR", "WNT", "OxPhos")) %>% #PUC pathways
+  group_by(pathway) %>%
+  wilcox_test(GSVA~hist_sample, ref.group = "PUC") %>%
+  add_xy_position(step.increase = 0.05) %>%
+  add_significance("p")
+gsva_df %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC", .default = hist_sample)) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  filter(pathway %in% c("E2F", "DNARepair", "TGFB", "MTOR", "WNT", "OxPhos")) %>% #PUC pathways
+  ggplot(aes(x=hist_sample, y=GSVA)) +
+    geom_boxplot(aes(fill=hist_sample), outlier.shape=NA, show.legend = F) +
+    geom_jitter( size=2, height=0, width=0.2) +
+    scale_fill_manual(values=hist_col) +
+    facet_wrap(~pathway) +
+    stat_pvalue_manual(stat.test %>% filter(p<0.05), label = "p.signif", tip.length = 0) +
+    stat_pvalue_manual(stat.test %>% filter(p<0.1, p>0.05), label = "p", tip.length = 0) +
+    labs(x="Histology (Sample-Level)", y="GSVA", color="Patient", caption="showing wilcox test unadj p-val<0.1")
+ggsave(paste0(wd, "fGSEA/PUChistNB_GSVA_scores_byHistSample.pdf"), width=8, height=8)
+## top 4 pathways
+stat.test <- gsva_df %>%
+  filter(hist_sample %in% c("UC", "PUC", "UCSD")) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC"))) %>%
+  filter(pathway %in% c("E2F", "DNARepair", "TGFB", "WNT")) %>% #PUC pathways
+  group_by(pathway) %>%
+  wilcox_test(GSVA~hist_sample, ref.group = "PUC") %>%
+  add_xy_position(step.increase = 0.05) %>%
+  add_significance("p")
+gsva_df %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC", .default = hist_sample)) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  filter(pathway %in% c("E2F", "DNARepair", "TGFB", "WNT")) %>% #PUC pathways
+  ggplot(aes(x=hist_sample, y=GSVA)) +
+    geom_boxplot(aes(fill=hist_sample), outlier.shape=NA, show.legend = F) +
+    geom_jitter( size=2, height=0, width=0.2) +
+    scale_fill_manual(values=hist_col) +
+    facet_wrap(~pathway) +
+    border() +
+    stat_pvalue_manual(stat.test %>% filter(p<0.05), label = "p.adj", tip.length = 0) +
+    labs(x="Histology (Sample-Level)", y="GSVA", color="Patient", caption="showing wilcox test adj p-val<0.05")
+ggsave(paste0(wd, "fGSEA/PUChistNB_GSVA_scores_byHistSample_top4.pdf"), width=8, height=8)
+ggsave(paste0(figs, "fGSEA/PUChistNB_GSVA_scores_byHistSample_top4_withadjpval.pdf"), width=8.5, height=8)
+
+##every tumor UCSD (leading edge)
+stat.test <- gsva_df %>%
+  filter(hist_sample %in% c("UC", "PUC", "UCSD")) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC"))) %>%
+  filter(pathway %in% c("Hypox", "EMT", "TNFA",  "Inflam", "InterferonA", "UPR", "AJ")) %>% #UCSD pathways
+  group_by(pathway) %>%
+  wilcox_test(GSVA~hist_sample, ref.group = "UCSD") %>%
+  add_xy_position(step.increase = 0.05) %>%
+  add_significance("p")
+gsva_df %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC", .default = hist_sample)) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  filter(pathway %in% c("Hypox", "EMT", "TNFA",  "Inflam", "InterferonA", "UPR", "AJ")) %>% #UCSD pathways
+  ggplot(aes(x=hist_sample, y=GSVA)) +
+    geom_boxplot(aes(fill=hist_sample), outlier.shape=NA, show.legend = F) +
+    geom_jitter( size=2, height=0, width=0.2) +
+    scale_fill_manual(values=hist_col) +
+    facet_wrap(~pathway) +
+    stat_pvalue_manual(stat.test %>% filter(p<0.05), label = "p.signif", tip.length = 0) +
+    stat_pvalue_manual(stat.test %>% filter(p<0.1, p>0.05), label = "p", tip.length = 0) +
+    labs(x="Histology (Sample-Level)", y="GSVA", color="Patient", caption="showing wilcox test unadj p-val<0.1")
+ggsave(paste0(wd, "fGSEA/UCSDhist_GSVA_scores_byHistSample.pdf"), width=8, height=8)
+stat.test <- gsva_df %>%
+  filter(hist_sample %in% c("UC", "PUC", "UCSD")) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC"))) %>%
+  filter(pathway %in% c("EMT", "AJ", "Inflam",  "InterferonA")) %>% #UCSD pathways
+  mutate(pathway = factor(pathway, levels=c("EMT", "AJ", "Inflam",  "InterferonA"))) %>%
+  group_by(pathway) %>%
+  wilcox_test(GSVA~hist_sample, ref.group = "UCSD") %>%
+  add_xy_position(step.increase = 0.05) %>%
+  add_significance("p")
+gsva_df %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC", .default = hist_sample)) %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  filter(pathway %in% c("EMT", "AJ", "Inflam",  "InterferonA")) %>% #UCSD pathways
+  mutate(pathway = factor(pathway, levels=c("EMT", "AJ", "Inflam",  "InterferonA"))) %>%
+  ggplot(aes(x=hist_sample, y=GSVA)) +
+    geom_boxplot(aes(fill=hist_sample), outlier.shape=NA, show.legend = F) +
+    geom_jitter( size=2, height=0, width=0.2) +
+    scale_fill_manual(values=hist_col) +
+    facet_wrap(~pathway) +
+    border() +
+    stat_pvalue_manual(stat.test %>% filter(p<0.05), label = "p.adj", tip.length = 0) +
+    stat_pvalue_manual(stat.test %>% filter(p<0.1, p>0.05), label = "p.adj", tip.length = 0) +
+    labs(x="Histology (Sample-Level)", y="GSVA", color="Patient", caption="showing wilcox test adj p-val<0.1")
+ggsave(paste0(wd, "fGSEA/UCSDhist_GSVA_scores_byHistSample_top4.pdf"), width=8, height=8)
+ggsave(paste0(figs, "fGSEA/UCSDhist_GSVA_scores_byHistSample_top4_withadjpval.pdf"), width=8.5, height=8)
+```
+
+
+### MOLECULAR SUBTYPES ###
+
+per-cell molecular subtypes
+```{r}
+count_mat <- as.data.frame(LayerData(seurat_ep, assay = "RNA", layer = "data")) #data layer is already log transformed normalized exp
+
+ep_class <- getConsensusClass(count_mat, minCor = .1, gene_id = "hgnc_symbol") %>%  
+  rownames_to_column("cell_id") %>%
+  dplyr::rename("NE"="NE-like", "consensusClass_percell"="consensusClass") %>%
+  rowwise() %>% dplyr::mutate(cor_percell = max(c_across(LumP:NE))) %>% ungroup()
+ep_class <- as.data.frame(ep_class)
+rownames(ep_class) <- ep_class$cell_id
+
+seurat_ep <- AddMetaData(seurat_ep, ep_class[,c(2,11)])
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "consensusClass_percell", shuffle = T, alpha=0.5) +
+  scale_color_manual(values=mol_cols)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCpercell.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction = "umap.cca", features = "cor_percell") +
+  scale_color_gradientn(colors=brewer.ylgnbu(1000))
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCpercell_correlation.tiff", width=6, height=5)
+
+perCell_df <- seurat_ep@meta.data %>%
+  select(sampleName, consensusClass_percell) %>%
+  table() %>% as.data.frame() %>%
+  filter(Freq>0) %>%
+  left_join(seurat_ep@meta.data %>% distinct(sampleName, patient, histology))
+order1 <- perCell_df %>%
+  filter(consensusClass_percell == "Ba/Sq") %>%
+  arrange(histology, Freq) %>%
+  pull(sampleName)
+order2 <- perCell_df %>%
+  arrange(histology) %>%
+  pull(sampleName)
+order3 <- c(setdiff(order2, order1), order1)
+order1 <- c("19_007D5", "19_007K3","18_120L1", "17_071I1", "15_109G5" ,"19_022I1"  ,"19_044G2", "19_044K3", "16_079H1" ,"16_079N3" ,"16_079P4", "17_030G1", "17_026K2" ,"17_026J3", "19_022H1")
+perCell_df %>%
+  mutate(sampleName = factor(sampleName, levels=order1)) %>%
+  ggplot(aes(x=sampleName, y=Freq, fill=consensusClass_percell)) +
+    geom_bar(stat="identity", position = "fill") +
+    scale_fill_manual(values=c(mol_cols, hist_col), breaks = names(mol_cols)) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(breaks=seq(0,1,0.2)) +
+    geom_tile(aes(fill=histology, x=sampleName, y=1.1), width=0.8, height=0.1) +
+    labs(x="Sample", y="Proportion of cells")
+ggsave(paste0(wd,"consensusMIBC_snRNAseq_percell_stackedbar.pdf"), width=5, height=2.5)
+ggsave('Figure4/images/consensusMIBC_snRNAseq_percell_stackedbar.pdf', width=5, height=2.5)
+```
+
+molecular subtypes on pseudobulked snRNAseq
+```{r}
+#pseudobulk by cluster
+pseudo_cluster <- AggregateExpression(seurat_ep, assays = "RNA", return.seurat = T, group.by = "ep_clusters")
+
+count_psCluster <- as.data.frame(LayerData(pseudo_cluster, assay = "RNA", layer = "data")) #data layer is already log transformed normalized exp
+
+ep_class <- getConsensusClass(count_psCluster, minCor = .1, gene_id = "hgnc_symbol") %>% 
+  rownames_to_column("ep_clusters") %>%
+  dplyr::mutate(ep_clusters = as.numeric(sub("g", "", ep_clusters))) %>%
+  dplyr::rename("NE"="NE-like", "consensusClass_perCluster"="consensusClass") %>%
+  rowwise() %>%
+  dplyr::mutate(cor_perCluster = max(c_across(LumP:NE))) %>% ungroup()
+
+df1 <- seurat_ep@meta.data %>% select(ep_clusters)
+df1$barcode <- rownames(df1)
+df1$ep_clusters <- as.numeric(as.character(df1$ep_clusters))
+df1 <- left_join(df1, ep_class )
+rownames(df1) <- df1$barcode
+df1$barcode <- NULL
+seurat_ep <- AddMetaData(seurat_ep, df1 %>% select(consensusClass_perCluster, cor_perCluster))
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "consensusClass_perCluster", shuffle = T, alpha=0.5) +
+  scale_color_manual(values=mol_cols) +
+  labs(title="Consensus Mol Subtype per Cluster") +
+  theme(legend.position = "none")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCperCluster.pdf", width=4, height=4)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCperCluster_nolegend.tiff", width=4, height=4, dpi=600)
+FeaturePlot(seurat_ep, reduction = "umap.cca", features = "cor_perCluster") +
+  scale_color_gradientn(colors=brewer.ylgnbu(1000)) +
+  labs(title="Consensus Mol Subtype per Cluster (Correlation)")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCperCluster_correlation.pdf", width=4, height=4)
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCperCluster_correlation.tiff", width=6, height=5)
+
+
+#pseudobulk by sample
+pseudo_sample <- AggregateExpression(seurat_ep, assays = "RNA", return.seurat = T, group.by = "sampleName")
+
+count_psSample <- as.data.frame(LayerData(pseudo_sample, assay = "RNA", layer = "data")) #data layer is already log transformed normalized exp
+
+ep_class <- getConsensusClass(count_psSample, minCor = .1, gene_id = "hgnc_symbol") %>% 
+  rownames_to_column("sampleName") %>%
+  dplyr::mutate(sampleName = sub("g", "", sampleName)) %>%
+  dplyr::mutate(sampleName = sub("-", "_", sampleName)) %>%
+  dplyr::rename("NE"="NE-like", "consensusClass_perSample"="consensusClass") %>%
+  rowwise() %>%
+  dplyr::mutate(cor_perSample = max(c_across(LumP:NE))) %>% ungroup()
+
+df1 <- seurat_ep@meta.data %>% select(sampleName)
+df1$barcode <- rownames(df1)
+df1 <- left_join(df1, ep_class )
+rownames(df1) <- df1$barcode
+df1$barcode <- NULL
+seurat_ep <- AddMetaData(seurat_ep, df1 %>% select(consensusClass_perSample, cor_perSample))
+
+DimPlot(seurat_ep, reduction = "umap.cca", group.by = "consensusClass_perSample", shuffle = T, alpha=0.5) +
+  scale_color_manual(values=mol_cols) +
+  labs(title="Consensus Mol Subtype per Sample")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCperSample.tiff", width=6, height=5)
+FeaturePlot(seurat_ep, reduction = "umap.cca", features = "cor_perSample") +
+  scale_color_gradientn(colors=brewer.ylgnbu(1000)) +
+  labs(title="Consensus Mol Subtype per Sample (Correlation)")
+ggsave("seurat1000/seurat1000_noD_epithelial_dim20res125/UMAP_MIBCperSample_correlation.tiff", width=6, height=5)
+```
+
+plot of bulk RNAseq MIBC
+```{r}
+wd2 <- "Figure4/"
+
+sample_data <- read.csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv') 
+
+bulk_MIBC <- read.table("Bulk_RNASeq_Analysis/subtype_analysis/Ming_subtype_91_samples_combat_corrected_data.txt", header = T) %>%
+  left_join(sample_data %>% select(patient, tumor_site, tissue_type,hist_patient, hist_sample, rnaseq_sampleName, rnaseq_bad), by=c("ID"="rnaseq_sampleName")) %>%
+  mutate(consensusClass_filtered = ifelse(separationLevel>0.2, consensusClass, "NA")) %>%
+  filter(!ID %in% c("28534", "28540"))
+
+bulk_MIBC %>%
+  filter(rnaseq_bad=="good") %>%
+  select(hist_sample, consensusClass_filtered) %>%
+  table() %>% as.data.frame() %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "PUC", "UCSD", "UC-sarcomatoid", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA"))) %>%
+  ggplot(aes(x=hist_sample, y=Freq, fill=consensusClass_filtered)) +
+    geom_bar(stat="identity", position = "fill") +
+    scale_fill_manual(values=mol_cols) +
+    labs(x="Histology (sample)", y="Proportion", fill="MIBC (filtered)", title = "ConsensusMIBC from bulk RNAseq", caption = "separationLevel>0.2")
+ggsave(paste0(wd,"consensusMIBC_bulkRNAseq_stackedbar.pdf"), width=5, height=4)
+ggsave(paste0(wd2,"consensusMIBC_bulkRNAseq_stackedbar.pdf"), width=5, height=4)
+
+bulk_MIBC %>%
+  filter(rnaseq_bad=="good") %>%
+  select(hist_patient, consensusClass_filtered) %>%
+  table() %>% as.data.frame() %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA"))) %>%
+  ggplot(aes(x=hist_patient, y=Freq, fill=consensusClass_filtered)) +
+    geom_bar(stat="identity", position = "fill") +
+    scale_fill_manual(values=mol_cols) +
+    labs(x="Histology (patient)", y="Proportion", fill="MIBC (filtered)", title = "ConsensusMIBC from bulk RNAseq", caption = "separationLevel>0.2")
+ggsave(paste0(wd,"consensusMIBC_bulkRNAseq_stackedbar_PatientHist.pdf"), width=5, height=4)
+
+
+order_pat <- bulk_MIBC %>% mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE"))) %>% arrange(hist_patient) %>% distinct(patient) %>% pull(patient)
+bulk_MIBC %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA")),
+         patient = factor(patient, levels=order_pat)) %>%
+  filter(rnaseq_bad=="good") %>%
+  ggplot(aes(x=patient,fill=consensusClass_filtered, color=tissue_type)) +
+    geom_bar(linewidth=1) +
+    scale_fill_manual(values=c(mol_cols, hist_col)) +
+    #scale_color_manual(values=hist_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    geom_tile(aes(fill=hist_patient, x=patient, y=6.2), width=0.8, height=0.2)
+bulk_MIBC %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA")),
+         patient = factor(patient, levels=order_pat)) %>%
+  filter(rnaseq_bad=="good") %>%
+  ggplot(aes(x=patient,fill=consensusClass_filtered, color=hist_sample, y=1)) +
+    geom_bar(linewidth=1, stat="identity") +
+    scale_fill_manual(values=c(mol_cols, hist_col)) +
+    scale_color_manual(values=hist_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    geom_tile(aes(fill=hist_patient, x=patient, y=6.2), width=0.8, height=0.2)
+
+#separate primary vs met
+no_met <- sort(setdiff(unique(bulk_MIBC$patient),bulk_MIBC %>% filter(tissue_type=="Met", rnaseq_bad=="good") %>% pull(patient)))
+bulk_MIBC %>%
+  filter(tissue_type=="Met") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA")),
+         patient = factor(patient, levels=order_pat)) %>%
+  filter(rnaseq_bad=="good") %>%
+  select(ID, patient, consensusClass_filtered, hist_patient, hist_sample) %>%
+  rbind(data.frame(patient = no_met, consensusClass_filtered = "no_met", ID=NA) %>% left_join(sample_data %>% filter(tissue_type=="Met") %>% select(patient, hist_patient, hist_sample))) %>%
+  ggplot(aes(x=patient,fill=consensusClass_filtered, color=hist_sample, y=1)) +
+    geom_bar(linewidth=0.5, stat="identity") +
+    scale_fill_manual(values=c(mol_cols, hist_col, "no_met"="white"), na.value = "snow3") +
+    scale_color_manual(values=hist_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    geom_tile(aes(fill=hist_patient, x=patient, y=5.2), width=0.8, height=0.2) +
+    labs(x="", y="Metastasis count")
+ggsave(paste0(wd,"consensusMIBC_bulkRNAseq_stackedbar_Mets.pdf"), width=5, height=4)
+ggsave(paste0(wd2,"consensusMIBC_bulkRNAseq_stackedbar_Mets.pdf"), width=5, height=3)
+
+no_primary <- sort(setdiff(unique(bulk_MIBC$patient),bulk_MIBC %>% filter(tissue_type=="Primary", rnaseq_bad=="good") %>% pull(patient)))
+bulk_MIBC %>%
+  filter(tissue_type=="Primary") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA")),
+         patient = factor(patient, levels=order_pat)) %>%
+  filter(rnaseq_bad=="good") %>%
+  select(ID, patient, consensusClass_filtered, hist_patient, hist_sample) %>%
+  rbind(data.frame(patient = no_primary, consensusClass_filtered = "no_primary", ID=NA) %>% left_join(sample_data %>% filter(tissue_type=="Primary") %>% select(patient, hist_patient, hist_sample))) %>%
+  ggplot(aes(x=patient,fill=consensusClass_filtered, color=hist_sample, y=1)) +
+    geom_bar(linewidth=0.5, stat="identity") +
+    scale_fill_manual(values=c(mol_cols, hist_col), na.value = "white") +
+    scale_color_manual(values=hist_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(breaks=c(0,1)) +
+    #geom_tile(aes(fill=hist_patient, x=patient, y=5.2), width=0.8, height=0.2) +
+    labs(x="", y="Primary")
+ggsave(paste0(wd,"consensusMIBC_bulkRNAseq_stackedbar_Pri.pdf"), width=5, height=1)
+ggsave(paste0(wd2,"consensusMIBC_bulkRNAseq_stackedbar_Pri.pdf"), width=5, height=1)
+
+```
+
+
+save RDS with consensusMIBC
+```{r}
+saveRDS(seurat_ep, file="seurat1000/seurat1000_noD_epithelial_dim20res1.25_annotated.rds")
+```
+
+### INTRA TUMORAL HETEROGENEITY ###
+
+stacked bar graphs of how many cells in each tumor are consensus classes
+```{r}
+order1 <- seurat_ep@meta.data %>% distinct(sampleName, histology) %>% arrange(desc(histology), sampleName) %>% pull(sampleName)
+order1 <- c("17_026J3", "17_026K2", "19_022H1", "16_079H1", "16_079N3", "16_079P4", "17_030G1",  "19_044G2", "19_044K3" ,"19_022I1","15_109G5", "17_071I1", "18_120L1", "19_007D5", "19_007K3")
+
+seurat_ep@meta.data %>%
+  select(sampleName, histology, ep_clusters, consensusClass_perCluster, cor_perCluster) %>%
+  mutate(sampleName = factor(sampleName, levels=order1)) %>%
+  ggplot(aes(x=sampleName, fill=consensusClass_perCluster)) +
+    geom_bar(stat="count", position = "fill") +
+    scale_fill_manual(values=c(mol_cols, hist_col)) +
+    geom_tile(aes(x=sampleName, fill=histology, y=1.05), width=0.9, height=0.08) +
+    theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(breaks = seq(0,1,0.25)) +
+    labs(x="", y="Proportion")
+
+seurat_ep@meta.data %>%
+  select(sampleName, histology, ep_clusters, consensusClass_percell, cor_perCluster) %>%
+  mutate(sampleName = factor(sampleName, levels=order1)) %>%
+  ggplot(aes(x=sampleName, fill=consensusClass_percell)) +
+    geom_bar(stat="count", position = "fill") +
+    scale_fill_manual(values=c(mol_cols, hist_col)) +
+    geom_tile(aes(x=sampleName, fill=histology, y=1.05), width=0.8, height=0.08) +
+    theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5))
+```
+what ep_clusters in what samples?
+-bar plot & entropy
+```{r}
+cluster_col <- unname(glasbey())[1:28] %>% setNames(seq(0,27,1))
+cluster_col <- c(unname(glasbey()), unname(trubetskoy())[1:10]) %>% setNames(seq(0,40,1))
+order1 <- c("17_026J3", "17_026K2", "19_022H1", "16_079H1", "16_079N3", "16_079P4", "17_030G1",  "19_044G2", "19_044K3" ,"19_022I1","15_109G5", "17_071I1", "18_120L1", "19_007D5", "19_007K3")
+order2 <- c("19_044", "17_030", "16_079", "19_022", "17_026",  "19_007","15_109","17_071" ,"18_120")
+
+#stacked bar (per sample)
+seurat_ep@meta.data %>%
+  select(sampleName, histology, ep_clusters) %>%
+  mutate(sampleName = factor(sampleName, levels=order1)) %>%
+  ggplot(aes(x=sampleName, fill=ep_clusters)) +
+    geom_bar(stat="count", position = "fill") +
+    scale_fill_manual(values=c(cluster_col, hist_col, samp_cols)) +
+    geom_tile(aes(x=sampleName, fill=histology, y=1.05), width=0.9, height=0.08) +
+    geom_tile(aes(x=sampleName, fill=sampleName, y=1.15), width=0.9, height=0.08) +
+    theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(breaks = seq(0,1,0.25)) +
+    #theme(legend.position = "none") +
+    labs(x="", y="Proportion")
+ggsave(paste0(wd, "EpClusters_perSample_FillBar.pdf"), width=7, height=4)
+ggsave(paste0(sups, "EpClusters_perSample_FillBar.pdf"), width=5, height=4)
+
+#stacked bar (per patient)
+seurat_ep@meta.data %>%
+  select(patient, histology, ep_clusters) %>%
+  mutate(patient = factor(patient, levels=order2)) %>%
+  ggplot(aes(x=patient, fill=ep_clusters)) +
+    geom_bar(stat="count", position = "fill") +
+    scale_fill_manual(values=c(cluster_col, hist_col, samp_cols)) +
+    geom_tile(aes(x=patient, fill=histology, y=1.05), width=0.9, height=0.08) +
+    theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(breaks = seq(0,1,0.25)) +
+    #theme(legend.position = "none") +
+    labs(x="", y="Proportion")
+ggsave(paste0(wd, "EpClusters_perPatient_FillBar.pdf"), width=7, height=4)
+ggsave(paste0(sups, "EpClusters_perPatient_FillBar.pdf"), width=5, height=4)
+
+
+#calculate entropy per sample
+ent_sample <- seurat_ep@meta.data %>%
+  select(sampleName, histology, ep_clusters) %>%
+  group_by(sampleName) %>%
+  mutate(n_cells_sample = n()) %>% ungroup() %>%
+  group_by(sampleName, ep_clusters) %>%
+  mutate(n_cells_cluster_sample = n()) %>% ungroup() %>%
+  distinct() %>%
+  mutate(proportion_cluster = n_cells_cluster_sample/n_cells_sample) %>%
+  group_by(sampleName) %>%
+  summarise(ent = entropy(proportion_cluster), 
+            ent_MM = entropy(n_cells_cluster_sample, method="MM"), 
+            ent_Jef = entropy(n_cells_cluster_sample, method="Jeffreys")) %>%
+  left_join(seurat_ep@meta.data %>% distinct(sampleName, patient, histology)) 
+
+ent_sample %>%
+  ggplot(aes(x=histology, y= ent)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width=0.25, height = 0, aes(color=patient), size=4) +
+    scale_color_manual(values=unname(trubetskoy())) +
+    labs(title="Entropy (default)")
+# ent_sample %>%
+#   ggplot(aes(x=histology, y= ent_MM)) +
+#     geom_boxplot(outlier.shape = NA) +
+#     geom_jitter(width=0.25, height = 0, aes(color=patient), size=4) +
+#     scale_color_manual(values=unname(trubetskoy())) +
+#     labs(title="Entropy (MM)")
+# ent_sample %>%
+#   ggplot(aes(x=histology, y= ent_Jef)) +
+#     geom_boxplot(outlier.shape = NA) +
+#     geom_jitter(width=0.25, height = 0, aes(color=patient), size=4) +
+#     scale_color_manual(values=unname(trubetskoy())) +
+#     labs(title="Entropy (Jeffreys)")
+
+order2 <- ent_sample %>% group_by(patient) %>% summarise(ent = median(ent)) %>% arrange(ent)%>% pull(patient)
+ent_sample %>%
+  mutate(patient = factor(patient, levels=order2)) %>%
+  ggplot(aes(x=patient, y= ent)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width=0.25, height = 0, aes(fill=histology), size=4, alpha=0.8, shape=21, stroke=NA) +
+    scale_fill_manual(values=hist_col) +
+    labs(x="Patient", y="Entropy", color="Histology")
+ggsave(paste0(wd, "Entropy_perSample_byPatient.pdf"), width=4, height=3)
+ggsave(paste0(figs, "Entropy_perSample_byPatient.pdf"), width=4, height=3)
+
+#calculate entropy per patient
+pat_hist <- seurat_ep@meta.data %>% distinct(patient, histology) %>% arrange(patient) %>% filter(patient !="19_022") %>% bind_rows(data.frame(patient = "19_022", histology="UC_UCSD"))
+ent_patient <- seurat_ep@meta.data %>%
+  select(patient, histology, ep_clusters) %>%
+  group_by(patient) %>%
+  mutate(n_cells_patient = n()) %>% ungroup() %>%
+  group_by(patient, ep_clusters) %>%
+  mutate(n_cells_cluster_patient = n()) %>% ungroup() %>%
+  distinct() %>%
+  mutate(proportion_cluster = n_cells_cluster_patient/n_cells_patient) %>%
+  group_by(patient) %>%
+  summarise(ent = entropy(proportion_cluster)) %>%
+  left_join(pat_hist)
+
+ent_patient %>%
+  filter(histology %in% c("UC", "PUC")) %>%
+  t_test(ent~histology)
+ent_patient %>%
+  ggplot(aes(x=histology, y= ent)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width=0.15, height = 0, aes(color=patient), size=4) +
+    scale_color_manual(values=unname(trubetskoy()))
+```
+correlated entropy with clinical- updated
+```{r}
+clinical <- read.csv('Supplementary_Tables/clinical_data/all_clinical_data_updated.csv')
+
+n_tumors <- data.frame(patient = c("15_109", "16_079" ,"17_026" ,"17_030" ,"17_071" ,"18_120", "19_007" ,"19_022" ,"19_044"), 
+                       n_tumors = c(1,3,2,1,1,1,2,2,2))
+
+df <- ent_patient %>%
+  left_join(n_tumors) %>%
+  mutate(patient = sub("_","-", patient), 
+         histology = case_match(histology, "UC_UCSD"~"UCSD", .default = histology)) %>%
+  left_join(clinical %>% select(Patient, Survival_from_Dx_years, Survival_from_metastasis_yrs, dx_to_met_months, total_treatments), by=c("patient"="Patient"))
+
+#overall survival
+df %>% 
+  ggplot(aes(x=Survival_from_Dx_years, y= ent)) +
+    geom_point(aes(color=patient), size=3) +
+    scale_color_manual(values=pat_col2) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    stat_cor(label.x.npc = 0, method = "spearman")
+
+#surv from met
+df %>% 
+  ggplot(aes(x=Survival_from_metastasis_yrs, y= ent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(color=patient), size=3) +
+    scale_color_manual(values=pat_col2) +
+    stat_cor(label.x.npc = 0, method = "spearman")
+df %>% 
+  ggplot(aes(x=Survival_from_metastasis_yrs, y= ent)) +
+    scale_color_manual(values=hist_col) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(color=histology), size=3) +
+    stat_cor(label.x.npc = 0, method = "spearman") +
+    theme(legend.position = "none") +
+    labs(x="Survival from First Met (years)", y="Entropy", caption="spearman correlation")
+ggsave(paste0(wd, "Entropy_Correlation_SurvivalfromMet.pdf"), width=5, height=4)
+ggsave(paste0(figs, "Entropy_Correlation_SurvivalfromMet.pdf"), width=4, height=4)
+
+
+#ANCOVA
+#covariate = histology
+model <- lm(ent ~ Survival_from_metastasis_yrs + histology, data=df)
+summary(model) #Survival p-val = 0.0406
+
+model_cov <- lm(ent ~ histology, data=df)
+r_squared_full <- summary(model)$r.squared
+r_squared_reduced <- summary(model_cov)$r.squared
+partial_r2 <- (r_squared_full - r_squared_reduced) / (1 - r_squared_reduced)
+partial_r2 #0.6011177
+
+#covariate = n_tumors
+model <- lm(ent ~ Survival_from_metastasis_yrs + n_tumors, data=df)
+summary(model) #Survival p-val = 0.0566
+
+model_cov <- lm(ent ~ n_tumors, data=df)
+r_squared_full <- summary(model)$r.squared
+r_squared_reduced <- summary(model_cov)$r.squared
+partial_r2 <- (r_squared_full - r_squared_reduced) / (1 - r_squared_reduced)
+partial_r2 #0.4804206
+
+#covariates = histology + n_tumors
+model <- lm(ent ~ Survival_from_metastasis_yrs + histology + n_tumors, data=df)
+summary(model) #Survival p-val = 0.0646
+
+model_cov <- lm(ent ~ histology, data=df)
+r_squared_full <- summary(model)$r.squared
+r_squared_reduced <- summary(model_cov)$r.squared
+partial_r2 <- (r_squared_full - r_squared_reduced) / (1 - r_squared_reduced)
+partial_r2 #0.6910789
+```
+
+
+ANCOVA
+```{r}
+n_tumors <- data.frame(patient = c("15_109", "16_079" ,"17_026" ,"17_030" ,"17_071" ,"18_120", "19_007" ,"19_022" ,"19_044"), 
+                       n_tumors = c(1,3,2,1,1,1,2,2,2))
+
+df <- ent_patient %>% 
+  #filter(patient !="19_022") %>%
+  left_join(timing_df %>% select(patient, dx_to_met_months)) %>%
+  left_join(clinical %>% mutate(patient = sub("-","_", Tissue..)) %>% select(patient, survival.from.dx..years., Survival.from.metastasis..yrs.)) %>%
+  mutate(surv_from_met = as.numeric(Survival.from.metastasis..yrs.), 
+         OS = survival.from.dx..years., 
+         met_delay = dx_to_met_months,
+         histology = case_match(histology, "UC_UCSD"~"UCSD", .default = histology)) %>%
+  left_join(n_tumors)
+
+#covariate = histology
+model <- lm(ent ~ surv_from_met + histology, data=df)
+summary(model) #Survival p-val = 0.0280
+
+model_cov <- lm(ent ~ histology, data=df)
+r_squared_full <- summary(model)$r.squared
+r_squared_reduced <- summary(model_cov)$r.squared
+partial_r2 <- (r_squared_full - r_squared_reduced) / (1 - r_squared_reduced)
+partial_r2 #0.5235859
+
+#covariates = histology + n_tumors
+model <- lm(ent ~ surv_from_met + histology + n_tumors, data=df)
+summary(model) #Survival p-val = 0.0405
+
+model_cov <- lm(ent ~ histology, data=df)
+r_squared_full <- summary(model)$r.squared
+r_squared_reduced <- summary(model_cov)$r.squared
+partial_r2 <- (r_squared_full - r_squared_reduced) / (1 - r_squared_reduced)
+partial_r2 #0.751178
+```

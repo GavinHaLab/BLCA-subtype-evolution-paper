@@ -1,0 +1,651 @@
+---
+title: "seurat1000_noD_immune.Rmd"
+output: html_document
+date: "2024-08-16"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(Seurat)
+library(SingleR)
+library(pals)
+library(ggpubr)
+library(rstatix)
+library(tidyverse)
+
+set.seed(42)
+```
+
+import seurat1000_noD
+```{r}
+seurat1000_noD <- readRDS("seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+seurat_immune <- readRDS("seurat1000_noD_immune/seurat1000_noD_immune_dim28res15_annotatedDec10.rds")
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD"="#43823D")
+
+imm_col <- c("B_cell" = "#FF0000","B_cell_plasma"= "#0000FF",
+             "Dendritic_cell"= "#00FF00","Mast_cell"= "#FFB79F", "Neutrophil"= "#FF00B6",
+             "Monocyte"= "#005300", "TAM"= "#FFD300", "TAM_matrix_remodeling"= "#9A4D42", "TAM_SPP1"= "#009FFF",
+             "T_cell_CD4_CD8_memory"= "#00FFBE", "T_cell_CD4_memory"= "#783FC1","T_cell_CD8_cytotoxic"= "#FE8F42",
+             "T_cell_CD8_exhausted"= "lavender","T_cell_gamma_delta"= "#14F9FF","T_cell_regulatory"= "#000033")
+
+site_col <- c("Liver"="#B668A9", "Lung"="#63596D", "Primary"="#750F2C","Bladder"="#750F2C", "Other"="#C2D7EF", "LN"="#F8ADA7", "Lymph"="#F8ADA7", "Adrenal"="#bfef45", "Omentum"="#000075")
+
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+wd <- 'seurat1000/seurat1000_noD_immune/'
+figs <- 'Figure5/Immune/'
+sups <- 'Supplementary_Figures_snRNAseq/panels/Immune_cell_typing/'
+```
+
+### MAKING IMMUNE OBJECT ###
+
+filter to immune (6,763 cells) & re-cluster
+```{r}
+#re-clustering
+seurat_immune <- subset(seurat1000_noD, subset=cell_type %in% c("T_cells", "Macrophage", "Monocyte", "B_cell"))
+seurat_immune[["RNA"]] <- split(seurat_immune[["RNA"]], f = seurat_immune$batch)
+seurat_immune <- NormalizeData(seurat_immune) 
+seurat_immune <- FindVariableFeatures(seurat_immune) 
+seurat_immune = ScaleData(seurat_immune) 
+seurat_immune <- RunPCA(seurat_immune) 
+  
+#investigate dimensions
+ElbowPlot(seurat_immune, ndims = 50) + geom_hline(yintercept=2) #elbow ~23?
+DimHeatmap(seurat_immune, dims = 21:25, cells = 500, balanced = TRUE)
+
+#continue pipeline, finding clusters
+seurat_immune <- FindNeighbors(seurat_immune, dims = 1:28, reduction = "pca")
+seurat_immune <- FindClusters(seurat_immune, resolution = 1.5, cluster.name = "unintegrated_clusters")
+seurat_immune <- RunUMAP(seurat_immune, dims = 1:28, reduction = "pca", reduction.name = "umap.unintegrated")
+#visualize umap (w/o batch correction)
+DimPlot(seurat_immune, reduction = "umap.unintegrated", group.by = "batch")
+DimPlot(seurat_immune, reduction = "umap.unintegrated", group.by = "sampleName")
+DimPlot(seurat_immune, reduction = "umap.unintegrated", group.by = "unintegrated_clusters")
+
+#batch correction
+seurat_immune <- IntegrateLayers(
+    object = seurat_immune, method = CCAIntegration,
+    orig.reduction = "pca", new.reduction = "integrated.cca"
+  )
+
+seurat_immune <- FindNeighbors(seurat_immune, reduction = "integrated.cca", dims = 1:28)
+seurat_immune <- FindClusters(seurat_immune, resolution = 1.5, cluster.name = "immune_clusters")
+seurat_immune <- RunUMAP(seurat_immune, reduction = "integrated.cca", dims = 1:28, reduction.name = "umap.cca")
+
+#join layers for downstream (DEG)
+seurat_immune <- JoinLayers(seurat_immune)
+```
+
+hpca detailed annotation
+```{r}
+hpca.ref <- celldex::HumanPrimaryCellAtlasData()
+
+sce <- as.SingleCellExperiment(DietSeurat(seurat_immune))
+hpca.main <- SingleR(test = sce, assay.type.test = 1, ref = hpca.ref, labels = hpca.ref$label.main)
+seurat_immune@meta.data$hpca.main   <- hpca.main$pruned.labels
+hpca.detailed <- SingleR(test = sce, assay.type.test = 1, ref = hpca.ref, labels = hpca.ref$label.fine)
+seurat_immune@meta.data$hpca.detailed   <- hpca.detailed$pruned.labels
+
+DimPlot(seurat_immune, reduction = "umap.cca", group.by = "hpca.main") +
+  scale_color_manual(values=unname(polychrome()))
+DimPlot(seurat_immune, reduction = "umap.cca", group.by = "hpca.detailed") +
+  theme(legend.position = "none")
+```
+
+### UMAPS ###
+
+make general UMAPs
+```{r}
+#visualize
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "immune_clusters", shuffle = T, label = T) +
+  scale_color_manual(values=unname(polychrome()))
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "updated_imm_type", shuffle = T, label = T) +
+  scale_color_manual(values=unname(polychrome()))
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "cell_type", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "hpca_subset", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "hpca.main", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "histology", shuffle = T) +
+  scale_color_manual(values=hist_col)
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "sampleName", shuffle = T) +
+  scale_color_manual(values=unname(glasbey()))
+
+#splitting with background
+umap_data <- Embeddings(seurat_immune, "umap.cca")
+meta_data <- seurat_immune@meta.data
+seurat_imm_df <- cbind(umap_data, meta_data)
+
+#facet wrap col must be selected out of grey geom_point
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=immune_clusters)) +
+  geom_point(data = seurat_imm_df %>% select(-immune_clusters), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~immune_clusters) +
+  scale_color_manual(values=unname(polychrome())) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=histology)) +
+  geom_point(data = seurat_imm_df %>% select(-sampleName), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~sampleName) +
+  scale_color_manual(values=hist_col) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=hpca.detailed)) +
+  geom_point(data = seurat_imm_df %>% select(-hpca.detailed), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~hpca.detailed) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+```
+
+UMAPs of some markers
+```{r}
+FeaturePlot(seurat_immune, reduction = "umap.cca", features = c("CD4", "CD8A", "CD8B", "CD44", "MKI67"))
+
+#cluster 14 things
+FeaturePlot(seurat_immune, reduction = "umap.cca", features = c("THBS2", "SULF1", "COL5A1", "ITGA11", "COL6A3", "PDGFRA", "TGFB1", "TGFB2", "VEGF", "MRC1", "MSR1"))
+
+FeaturePlot(seurat_immune, reduction = "umap.cca", features = c("PTPRC"))
+```
+
+save out UMAPs
+```{r}
+#visualize
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "immune_clusters", shuffle = T, label = T) +
+  scale_color_manual(values=unname(polychrome()))
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_clusters.tiff", width=6, height=5, dpi=600)
+
+DimPlot(seurat_immune, reduction = "umap.cca", group.by = "updated_imm_type") +
+  scale_color_manual(values=imm_col) +
+  theme(legend.position = "none")
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_updated_imm_type_nolegend.tiff", width=5, height=5, dpi=600)
+
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "cell_type", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_cell_type.tiff", width=6, height=5, dpi=600)
+
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "hpca_subset", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_hpca_subset.tiff", width=6, height=5, dpi=600)
+
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "hpca.main", shuffle = T) +
+  scale_color_manual(values=unname(polychrome())) + theme(legend.position = "none")
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_hpca.main_nolegend.tiff", width=6, height=5, dpi=600)
+
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "histology", shuffle = T) +
+  scale_color_manual(values=hist_col)
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_histology.tiff", width=6, height=5, dpi=600)
+
+DimPlot(seurat_immune, reduction="umap.cca", group.by = "sampleName", shuffle = T) +
+  scale_color_manual(values=unname(glasbey()))
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_sampleName.tiff", width=6, height=5, dpi=600)
+
+DimPlot(seurat_immune, reduction = "umap.cca", group.by = "TICA_type", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_TICA_type.tiff", width=7, height=5, dpi=600)
+
+FeaturePlot(seurat_immune, reduction = "umap.cca", features = "CCP1") +
+  scale_color_gradientn(colors=magma(100))
+ggsave("seurat1000/seurat1000_noD_immune/UMAP_CCP.tiff", width=6, height=5, dpi=600)
+
+#split
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=hpca.detailed)) +
+  geom_point(data = seurat_imm_df %>% select(-hpca.detailed), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  facet_wrap(~hpca.detailed) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+ggplot(seurat_imm_df, aes(x = umapcca_1, y = umapcca_2, color=hpca.detailed)) +
+  geom_point(data = seurat_imm_df %>% select(-hpca.detailed), color = "snow2", alpha = 0.5, size=0.02) +
+  geom_point(alpha = 0.8, size=0.02) +
+  coord_cartesian(xlim = c(0,5), ylim = c(5,10)) +
+  facet_wrap(~hpca.detailed) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+```
+
+### ANNOTATION ###
+
+TICA
+-Projection: upload a raw count matrix in csv format (comma-separated values), where rows are genes and columns are cell names (id). The gene names should be in symbol format and the cell ids must be unique. You should not normalize your matrix, only raw counts yield accurate results.
+-Annotation: To annotate your clusters, you will need to upload a csv file that contains (at least) the columns gene and cluster. With this function you will be able to compare your clusters’ marker genes to those of the cell types in the atlas.
+```{r}
+#Projection: raw counts (counts layer), rows are genes, cols are cell names
+df1 <- as.data.frame(seurat_immune[["RNA"]]$counts)
+write.csv(df1, "seurat1000_noD_immune_28-1.5_rawCounts.csv")
+
+#Annotation:
+markers <- FindAllMarkers(seurat_immune)
+top_markers <- markers %>%
+  mutate(percent_diff = pct.1-pct.2) %>%
+  filter(avg_log2FC>1, percent_diff>0.10, p_val_adj<0.01) %>%
+  group_by(cluster) %>%
+  slice_head(n=100) %>%
+  select(cluster, gene)
+write.csv(top_markers, "seurat1000_noD_immune_28-1.5_topMarkers.csv")
+
+TICA <- data.frame(immune_clusters = c(0,1,10:19,2,20:22,3:9),
+                   TICA_type = c("B_cell", "TAM_C1QC", "Plasma_B_cell", "Monocyte", "NK_cell", 
+                                 "T_cell_regulatory", NA, "T_cell_CD8_term_exhausted", "Dendritic_cell", "Neutrophil",
+                                 "B_cell", "Myeloid", "T_cell_naive", "T_cell", NA, 
+                                 "Mast_cell", "Macrophage", "TAM_C1QC", "B_cell",
+                                 "T_cell_CD8_cytotoxic", "B_cell", "TAM_C1QC", "T_cell_CD4_trans_mem"))
+df2 <- seurat_immune@meta.data %>% select(immune_clusters) %>%
+  mutate(immune_clusters = as.double(as.character(immune_clusters))) %>%
+  rownames_to_column() %>%
+  left_join(TICA)
+rownames(df2) <- df2$rowname
+seurat_immune <- AddMetaData(seurat_immune, df2 %>% select(TICA_type))
+DimPlot(seurat_immune, reduction = "umap.cca", group.by = "TICA_type", shuffle = T) +
+  scale_color_manual(values=unname(trubetskoy()))
+FeaturePlot(seurat_immune, reduction = "umap.cca", features = "CCP1") +
+  scale_color_gradientn(colors=magma(100))
+```
+
+annotate immune cell types (combined TICA/manual determination w/ Hrishi Dec 10 2024)
+```{r}
+manual_imm_type <- seurat_immune@meta.data %>% distinct(immune_clusters, TICA_type) %>% remove_rownames() %>% arrange(desc(TICA_type)) %>%
+  mutate(immune_clusters2 = as.numeric(as.character(immune_clusters))) %>%
+  mutate(updated_imm_type = case_match(immune_clusters2, 
+                                       c(20,2)~"T_cell_CD4_memory", 
+                                       c(9)~"T_cell_CD4_CD8_memory", 
+                                       c(6)~"T_cell_CD8_cytotoxic", 
+                                       c(15)~"T_cell_CD8_exhausted", 
+                                       c(13)~"T_cell_regulatory", 
+                                       c(12)~"T_cell_gamma_delta", 
+                                       c(5,7,0,18)~"B_cell", 
+                                       c(10,21)~"B_cell_plasma",
+                                       c(16)~"Dendritic_cell",
+                                       c(3,4,8)~"TAM_SPP1",
+                                       c(1,19)~"TAM",
+                                       c(14)~"TAM_matrix_remodeling",
+                                       c(11)~"Monocyte",
+                                       c(22)~"Mast_cell",
+                                       c(17)~"Neutrophil"
+                                       ))
+
+ann_df <- seurat_immune@meta.data %>% select(immune_clusters) %>% 
+  rownames_to_column(var="cell_id") %>%
+  left_join(manual_imm_type %>% select(immune_clusters, updated_imm_type))
+rownames(ann_df) <- ann_df$cell_id
+ann_df$cell_id <- NULL
+
+seurat_immune <- AddMetaData(seurat_immune, ann_df) 
+
+DimPlot(seurat_immune, reduction = "umap.cca", group.by = "updated_imm_type") +
+  scale_color_manual(values=imm_col)
+```
+
+save out immune rds (after hpca, TICA)
+```{r}
+saveRDS(seurat_immune, "seurat1000/seurat1000_noD_immune/seurat1000_noD_immune_dim28res15_annotatedDec10.rds")
+```
+
+### QUANTIFY CELL TYPES ###
+
+stacked bar- updated cell types
+```{r}
+#stacked bar by histology, using # of cells
+seurat_immune@meta.data %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  ggplot(aes(x=histology,  fill=updated_imm_type)) +
+    geom_bar(stat="count", position = "stack")  +
+    scale_fill_manual(values=imm_col) +
+    labs(x="", y="# cells", fill="Immune Cell Type") +
+    #theme(legend.position = "none") 
+    theme(
+    legend.text = element_text(size = 8),        
+    legend.title = element_text(size = 10),      
+    legend.key.size = unit(0.5, "cm"))
+ggsave("seurat1000/seurat1000_noD_immune/imm_celltype_byHistology_stackedbar.pdf", width=6, height=4)
+
+#stacked bar by histology, normalize to # cells in each sample
+n_df <- seurat1000_noD@meta.data$sampleName %>% table() %>% as.data.frame() %>% `colnames<-`(c("sampleName", "n_cells"))
+plot_df <- seurat_immune@meta.data %>% select(sampleName, updated_imm_type) %>% table() %>% as.data.frame() %>%
+  left_join(n_df) %>%
+  left_join(seurat_immune@meta.data %>% distinct(sampleName, histology, met_site)) %>%
+  mutate(percent = Freq/n_cells)
+##average cell type %s across histology to plot
+plot_df %>% 
+  group_by(histology, updated_imm_type) %>%
+  summarise(percent = mean(percent)) %>% ungroup() %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  ggplot(aes(x=histology,  fill=updated_imm_type, y=percent)) +
+    geom_bar(stat="identity", position = "stack")  +
+    scale_fill_manual(values=imm_col) +
+    scale_y_continuous(breaks=seq(0,.2,0.05), labels = seq(0,20,5)) +
+    labs(x="", y="% all cells", fill="Immune Cell Type") +
+    theme(legend.text = element_text(size = 8),        
+          legend.title = element_text(size = 10),      
+          legend.key.size = unit(0.5, "cm"))
+ggsave("seurat1000/seurat1000_noD_immune/imm_celltype_byHistology_stackedbar_percent.pdf", width=5, height=5)
+ggsave(paste0(wd, "imm_celltype_byHistology_stackedbar_percent.pdf"), width=5, height=5)
+ggsave(paste0(figs, "imm_celltype_byHistology_stackedbar_percent.pdf"), width=5, height=4)
+
+#stacked bar by histology, normalize to # cells in each sample (T-cells only)
+n_df <- seurat1000_noD@meta.data$sampleName %>% table() %>% as.data.frame() %>% `colnames<-`(c("sampleName", "n_cells"))
+plot_df <- seurat_immune@meta.data %>% filter(grepl("T_cell", updated_imm_type)) %>%
+  select(sampleName, updated_imm_type) %>% table() %>% as.data.frame() %>%
+  left_join(n_df) %>%
+  left_join(seurat_immune@meta.data %>% distinct(sampleName, histology, met_site)) %>%
+  mutate(percent = Freq/n_cells)
+##average cell type %s across histology to plot
+plot_df %>% 
+  group_by(histology, updated_imm_type) %>%
+  summarise(percent = mean(percent)) %>% ungroup() %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  ggplot(aes(x=histology,  fill=updated_imm_type, y=percent)) +
+    geom_bar(stat="identity", position = "fill")  +
+    scale_fill_manual(values=imm_col) +
+    scale_y_continuous(breaks=seq(0,1,0.2), labels = seq(0,100,20)) +
+    labs(x="", y="% of T-cells", fill="T-Cell Type") +
+    theme(legend.text = element_text(size = 8),        
+          legend.title = element_text(size = 10),      
+          legend.key.size = unit(0.5, "cm"))
+ggsave(paste0(wd, "T_celltype_byHistology_stackedbar_percent.pdf"), width=5, height=5)
+ggsave(paste0(figs, "T_celltype_byHistology_stackedbar_percent.pdf"), width=5, height=5)
+#chi sq test
+chi2 <- plot_df %>%
+  group_by(updated_imm_type, histology) %>%
+  summarise(Freq = sum(Freq)) %>%
+  pivot_wider(names_from = histology, values_from = Freq) %>%
+  as.data.frame()
+rownames(chi2) <- chi2$updated_imm_type
+chi2$updated_imm_type <- NULL
+chi2 <- as.matrix(chi2) #cols: PUC, UC, UCSD
+stat.test <- chisq_test(chi2) #6x3 matrix p=2.2e-16
+stat.test$p
+
+types <- unique(plot_df$updated_imm_type)
+chi2 <- plot_df %>%
+  mutate(group = case_match(updated_imm_type, types[6]~types[6], .default = "Other")) %>%
+  group_by(group, histology) %>%
+  summarise(Freq = sum(Freq)) %>%
+  pivot_wider(names_from = histology, values_from = Freq) %>%
+  as.data.frame()
+rownames(chi2) <- chi2$group
+chi2$group <- NULL
+chi2 <- as.matrix(chi2) #cols: PUC, UC, UCSD
+stat.test <- chisq_test(chi2) #2x3: all p<e-20
+stat.test$p
+
+
+#stacked bar each sample, normalize to # cells in each sample
+sample_order <- seurat_immune@meta.data %>% distinct(sampleName, histology, met_site) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  arrange(histology, met_site) %>% pull(sampleName)
+x <- seurat_immune@meta.data %>% distinct(sampleName, histology, met_site) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  arrange(histology, met_site) %>% group_by(histology) %>% summarise(n=n()) %>% pull(n) %>% cumsum()
+plot_df %>%
+  mutate(sampleName=factor(sampleName, levels= sample_order)) %>%
+  ggplot(aes(x=sampleName, fill=updated_imm_type, y=percent)) +
+    geom_bar(stat="identity", position = "stack")  +
+    geom_tile(aes(x=sampleName, fill=histology, y=0.66), width=.8, height=.05) +
+    geom_tile(aes(x=sampleName, fill=met_site, y=0.6), width=.8, height=.05) +
+    geom_vline(xintercept = (x+0.5)[1:2]) +
+    scale_fill_manual(values=c(hist_col,imm_col, site_col)) +
+    labs(x="", y="Proportion of all cells", fill="Immune Cell Type") +
+    theme(legend.text = element_text(size = 8),        
+          legend.title = element_text(size = 10),      
+          legend.key.size = unit(0.5, "cm")) +
+    scale_y_continuous(breaks=seq(0,0.5,0.1)) +
+    theme(axis.text.x = element_text(angle = 60, vjust = 1.2, hjust=1.2))
+ggsave(paste0(wd,"imm_celltype_bySample_stackedbar.pdf"), width=10, height=6)
+ggsave(paste0(sups,"imm_celltype_bySample_stackedbar.pdf"), width=10, height=6)
+```
+
+boxplots for updated cell types
+```{r}
+#by histology (updated immune types)
+df1 <- seurat1000_noD@meta.data %>%
+  group_by(sampleName) %>%
+  summarise(n_cells_sample = n()) 
+df <- seurat_immune@meta.data %>% 
+  select(sampleName, updated_imm_type) %>% 
+  table() %>% as.data.frame() %>%
+  left_join(df1) %>%
+  mutate(celltype_prop = Freq/n_cells_sample) %>%
+  left_join(seurat_immune@meta.data %>% distinct(sampleName, histology, met_site))
+
+stat.test <- df %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  group_by(updated_imm_type) %>%
+  wilcox_test(celltype_prop~histology) %>%
+  add_xy_position(step.increase = 0.1) %>%
+  add_significance("p")
+df %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  ggplot(aes(x=histology, y=celltype_prop)) +
+    geom_violin(aes(fill=histology), show.legend = F, scale="width") +
+    geom_jitter(height=0, width=0.15,alpha=0.6, size=2, shape=21, fill="black", stroke=NA) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.2, outlier.shape=NA) +
+    scale_fill_manual(values=hist_col) +
+    stat_pvalue_manual(stat.test, label="{p.signif} {p}", tip.length = 0) +
+    facet_wrap(~updated_imm_type, nrow=2) +
+    scale_y_continuous(breaks=seq(0,.45,0.05), labels = seq(0,45,5), limits = c(-0.01,.4)) +
+    labs(x="Histology", y="% of all cells", caption="wilcox unadj p-value")
+ggsave("seurat1000/seurat1000_noD_immune/all_updated_immune_cell_types_byHistology_violin.pdf", width=8, height=6)
+
+#cell types of interest
+stat.test <- df %>% filter(updated_imm_type %in% c("TAM_SPP1", "B_cell","T_cell_CD8_cytotoxic","T_cell_CD4_CD8_memory", "T_cell_CD4_memory", "TAM")) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  group_by(updated_imm_type) %>%
+  wilcox_test(celltype_prop~histology) %>%
+  add_xy_position(step.increase = 0.1) %>%
+  add_significance("p")
+df %>% filter(updated_imm_type %in% c("TAM_SPP1", "B_cell","T_cell_CD8_cytotoxic","T_cell_CD4_CD8_memory", "T_cell_CD4_memory", "TAM")) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  ggplot(aes(x=histology, y=celltype_prop)) +
+    geom_violin(aes(fill=histology), show.legend = F, scale="width") +
+    geom_jitter(height=0, width=0.15,alpha=0.6, size=3, shape=21, fill="black", stroke=NA) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.2, outlier.shape=NA) +
+    scale_fill_manual(values=hist_col) +
+    stat_pvalue_manual(stat.test, label="{p.signif} {p}", tip.length = 0) +
+    facet_wrap(~updated_imm_type, nrow=2) +
+    scale_y_continuous(breaks=seq(0,.45,0.05), labels = seq(0,45,5), limits = c(-0.01,.4)) +
+    labs(x="Histology", y="% of all cells", caption="wilcox unadj p-value")
+ggsave("seurat1000/seurat1000_noD_immune/select_updated_immune_cell_types_byHistology_violin.pdf", width=6, height=4)
+
+#combine some cell types of interest
+stat.test <- df %>% 
+  mutate(combined_type = case_when(updated_imm_type %in% c("B_cell", "B_cell_plasma")~"B_cell",
+                                   updated_imm_type %in% c("TAM", "TAM_SPP1","TAM_matrix_remodeling")~"TAM", 
+                                   grepl("T_cell", updated_imm_type)~"T_cell",
+                                   .default = NA)) %>%
+  filter(!is.na(combined_type)) %>%
+  group_by(combined_type, sampleName) %>%
+  summarise(combined_prop = sum(celltype_prop)) %>%
+  left_join(seurat_immune@meta.data %>% distinct(sampleName, histology, met_site)) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  wilcox_test(combined_prop~histology) %>%
+  add_xy_position(step.increase = 0.1) %>%
+  add_significance("p")
+df %>% 
+  mutate(combined_type = case_when(updated_imm_type %in% c("B_cell", "B_cell_plasma")~"B_cell",
+                                   updated_imm_type %in% c("TAM", "TAM_SPP1","TAM_matrix_remodeling")~"TAM", 
+                                   grepl("T_cell", updated_imm_type)~"T_cell",
+                                   .default = NA)) %>%
+  filter(!is.na(combined_type)) %>%
+  group_by(combined_type, sampleName) %>%
+  summarise(combined_prop = sum(celltype_prop)) %>%
+  left_join(seurat_immune@meta.data %>% distinct(sampleName, histology, met_site)) %>%
+  mutate(histology = factor(histology, levels=c("UC", "PUC", "UCSD"))) %>%
+  ggplot(aes(x=histology, y=combined_prop)) +
+    geom_violin(aes(fill=histology), show.legend = F, scale="width") +
+    geom_jitter(height=0, width=0.15,alpha=0.6, size=3, shape=21, fill="black", stroke=NA) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.2, outlier.shape=NA) +
+    scale_fill_manual(values=hist_col) +
+    stat_pvalue_manual(stat.test, label="{p.signif} {p}", tip.length = 0) +
+    facet_wrap(~combined_type, nrow=1) +
+    scale_y_continuous(breaks=seq(0,.55,0.05), labels = seq(0,55,5), limits = c(-0.01,.5)) +
+    labs(x="Histology", y="% of all cells", caption="wilcox unadj p-value")
+ggsave("seurat1000/seurat1000_noD_immune/select_updated_immune_cell_types_byHistology_violin.pdf", width=5, height=6)
+```
+
+beta binomial test for updated cell types
+```{r}
+library(glmmTMB)
+
+n_df <- seurat_immune@meta.data %>%
+  group_by(sampleName) %>%
+  summarise(total_cells = n())
+
+ann_df <- seurat1000_noD@meta.data %>%
+  select(sampleName, patient, histology, sex, met_site) %>%
+  distinct()
+
+test_df <- seurat_immune@meta.data %>%
+  select(sampleName, updated_imm_type) %>%
+  table() %>% as.data.frame() %>%
+  rename(n_celltype = Freq) %>%
+  left_join(n_df) %>%
+  left_join(ann_df)
+
+#test each cell type separately (UC vs PUC + UCSD vs PUC)
+results <- list()
+for(celltype in unique(test_df$updated_imm_type)){
+  df_subset <- test_df %>% filter(updated_imm_type == celltype)
+  
+  model <- glmmTMB(n_celltype/total_cells ~ histology + (1|sampleName), 
+                   family = betabinomial, 
+                   weights = total_cells, 
+                   data = df_subset)
+  
+  results[[celltype]] <- summary(model)
+}
+
+#test each cell type separately (UC vs UCSD)
+results <- list()
+for(celltype in unique(test_df$updated_imm_type)){
+  df_subset <- test_df %>% filter(updated_imm_type == celltype, histology!="PUC")
+  
+  model <- glmmTMB(n_celltype/total_cells ~ histology + (1|sampleName), 
+                   family = betabinomial, 
+                   weights = total_cells, 
+                   data = df_subset)
+  
+  results[[celltype]] <- summary(model)
+}
+
+results[["B_cell"]] #UC vs PUC:0.5268, PUC vs UCSD:0.3609, UCSD vs UC: 0.64201
+results[["T_cell_CD8_cytotoxic"]] #UC vs PUC:0.8311, PUC vs UCSD:0.0241, UCSD vs UC: 0.02
+results[["T_cell_CD8_exhausted"]] #UC vs PUC:0.198048, PUC vs UCSD:0.413950, UCSD vs UC: 0.642
+results[["T_cell_CD4_memory"]] #UC vs PUC:0.284, PUC vs UCSD:0.270, UCSD vs UC: 0.766
+results[["TAM"]] #UC vs PUC:0.78076, PUC vs UCSD:0.84798, UCSD vs UC: 0.691
+results[["TAM_SPP1"]] #UC vs PUC:0.1603, PUC vs UCSD:0.3340, UCSD vs UC: 0.828
+```
+
+
+### LOOKING AT MARKERS: DOTPLOTS ###
+
+detailed, manual look at immune cell types by cluster
+```{r}
+GOI <- c("CD3D", "TRAC", "TRDC", "NKG7", "CD4", "CD8B", 
+         "MS4A1","CD19", "IGHM", "IGHG1","IGHG2", "IGHG3", "SDC1","HLA-DRA", "CD37", "CD27", 
+         "CD68","CD14", "FLT3", "ITGAX","MRC1", "SPP1", "FCGR3A",
+         "CXCL8", "CSF3R", "CXCR1", "S100A9","CD83")
+DotPlot(seurat_immune, features = GOI) + theme(axis.text.x = element_text(angle = 60, vjust = 1.2, hjust=1.2)) +coord_flip()
+
+library(pheatmap)
+avg_exp <- AverageExpression(seurat_immune, features = GOI)$RNA
+gene_dist <- dist(t(avg_exp))
+gene_hclust <- hclust(gene_dist, method="complete")
+plot(gene_hclust)
+ordered_genes <- GOI[gene_hclust$order]
+
+DotPlot(seurat_immune, features = ordered_genes) + theme(axis.text.x = element_text(angle = 60, vjust = 1.2, hjust=1.2)) +coord_flip()
+DotPlot(seurat_immune, features = sort(GOI)) + theme(axis.text.x = element_text(angle = 60, vjust = 1.2, hjust=1.2)) +coord_flip()
+```
+
+nice dotplot
+```{r}
+all_markers <- c("CD44", #activation marker
+                 "CD3D", "TRAC", "CD4", "CD8B", "CD8A", #T-cell
+                 "SELL","TCF7","KLRG1",  #memory T cell (high SELL/TCF7, low KLRG1)
+                 "TOX1","PDCD1","LAG3", #exhausted T cell
+                 "FOXP3", #regulatory T cell
+                 "TRDC", "NKG7", #gamma delta T cell
+                 "MS4A1", "CD37", "CD19","IGHM", "IGHG1",  #B cell
+                 "SDC1", "CD38", #plasma B-cell
+                 "HLA-DRA", #antigen presentation
+                 "FLT3", #dendritic cell
+                 "ITGAX","FCGR3A", #macrophage
+                 "MSR1", "MRC1","CD163", #TAMs
+                 "SPP1", "C1QC", #immunosuppressive macrophage
+                 "IL18","NLRP3", #inflammatory markers in macrophage
+                 "COL5A1", "COL11A1","THBS2", #matrix remodeling TAM
+                 "KIT","IL5RA", #mast cell
+                 "CSF3R", "CXCR1",  #neutrophils
+                 "MKI67") 
+
+#make my own from ggplot
+##get expn data
+expn <- FetchData(seurat_immune, vars=all_markers) 
+expn <- expn %>% rownames_to_column(var="cell_id") %>%
+  left_join(seurat_immune@meta.data %>% select(sampleName, histology, TICA_type, immune_clusters) %>% rownames_to_column(var="cell_id"))
+expn <- expn %>% pivot_longer(cols=c(-cell_id, -sampleName, -histology, -TICA_type, -immune_clusters), names_to = "gene", values_to = "expn") 
+expn <- expn %>% mutate(log2expn = log2(expn+0.01))
+
+#plot by cluster
+##summarize each gene by cluster
+cluster_order <- c(2,20,9,6,15,13,12, #t-cells
+                   0,7,5,18,10,21, #B-cells
+                   16, #DC
+                   1,19, #SPP1 TAM
+                   3,4,8, #TAM
+                   14, #matrix remodeling TAM
+                   11, #monocyte
+                   22, #mast cell
+                   17 #neutrophil
+                   )
+
+df3 <- expn %>%
+  filter(expn>0) %>%
+  group_by(gene, immune_clusters) %>%
+  summarize(n_over0=n()) %>% ungroup()
+df4 <- expn %>%
+  group_by(gene, immune_clusters) %>%
+  summarize(avg_expn = mean(expn),
+            n_cells=n()) %>%
+  left_join(df3) %>%
+  mutate(n_over0 = case_when(is.na(n_over0)~0, .default = n_over0)) %>%
+  mutate(percent_over0 = n_over0/n_cells*100) 
+##graph
+df4 %>% filter(!is.na(immune_clusters)) %>%
+  mutate(gene = factor(gene, levels=all_markers), 
+         immune_clusters = factor(immune_clusters, levels=cluster_order)) %>%
+  ggplot(aes(x=immune_clusters, y=gene)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(color="black", angle=60, hjust=1, vjust=1),
+          axis.text.y = element_text(color="black"),
+          rect = element_rect(fill = NULL),
+          axis.ticks = element_line(color="black")) +
+    geom_point(aes(color=avg_expn, size=percent_over0)) +
+    geom_vline(xintercept = c(7,13,21)+0.5, color="snow3") +
+    #scale_color_gradient(low="snow", high="red") +
+    scale_color_gradient2(low = "snow", mid="gold",high="forestgreen", midpoint = 1.5) +
+    scale_size(range=c(0,6))
+ggsave(paste0(wd,'cluster_marker_dotplot.pdf'), width=10, height=8)
+ggsave(paste0(sups,'cluster_marker_dotplot.pdf'), width=10, height=8)
+```
+
