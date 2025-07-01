@@ -1,0 +1,2 @@
+sample	purity	ploidy
+19-001J4	0.593800	2.796000

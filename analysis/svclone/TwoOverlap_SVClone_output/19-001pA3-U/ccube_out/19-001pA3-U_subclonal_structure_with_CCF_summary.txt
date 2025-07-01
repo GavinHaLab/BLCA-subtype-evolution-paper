@@ -1,0 +1,2 @@
+"cluster" "n_ssms" "proportion" "CCF"
+1 572 0.5454 1

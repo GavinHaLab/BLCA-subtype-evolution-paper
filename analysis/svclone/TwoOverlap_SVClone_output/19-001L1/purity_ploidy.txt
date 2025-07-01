@@ -1,0 +1,2 @@
+sample	purity	ploidy
+19-001L1	0.431500	2.773000

@@ -1,0 +1,2 @@
+sample	purity	ploidy
+19-001pA3-U	0.545400	3.050000
