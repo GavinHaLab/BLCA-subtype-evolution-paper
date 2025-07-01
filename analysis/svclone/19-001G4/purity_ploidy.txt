@@ -1,2 +1,0 @@
-sample	purity	ploidy
-19-001G4	0.747500	2.735000

@@ -1,3 +1,0 @@
-sample	read_len	insert_mean	insert_std
-19-001G4	151	434.632698	173.597305
-
