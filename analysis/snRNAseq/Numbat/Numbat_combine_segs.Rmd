@@ -1,0 +1,206 @@
+---
+title: "Numbat_combine_segs"
+output: html_document
+date: "2024-09-11"
+---
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+# patient <- "17-026"
+# samples <- c("17_026J3", "17_026K2")
+# myfiles <- c("Numbat/bulk_CNV_calls/17-026J3.csv",
+#              "Numbat/bulk_CNV_calls/17-026K2.csv")
+
+# patient <- "19-007"
+# samples <- c("19_007D5", "19_007K3")
+# myfiles <- c("Numbat/bulk_CNV_calls/19-007D5.csv",
+#              "Numbat/bulk_CNV_calls/19-007K3.csv")
+
+# patient <- "19-022"
+# samples <- c("19_022H1", "19_022I1")
+# myfiles <- c("Numbat/bulk_CNV_calls/19-022H1.csv",
+#              "Numbat/bulk_CNV_calls/19-022I1.csv")
+#
+# patient <- "19-044"
+# samples <- c("19_044G2", "19_044K3")
+# myfiles <- c("Numbat/bulk_CNV_calls/19-044G2.csv",
+#              "Numbat/bulk_CNV_calls/19-044K3.csv")
+#
+# patient <- "16-079"
+# samples <- c("16_079H1", "16_079N3", "16_079P4")
+# myfiles <- c("Numbat/bulk_CNV_calls/16-079H1.csv",
+#              "Numbat/bulk_CNV_calls/16-079N3.csv",
+#              "Numbat/bulk_CNV_calls/16-079P4.csv")
+
+#remove poor quality H8 CNV profile
+patient <- "15-109"
+samples <- c("15_109I10", "15_109M2", "15_109N1")
+myfiles <- c("Numbat/bulk_CNV_calls/15-109I10.csv",
+             "Numbat/bulk_CNV_calls/15-109M2.csv",
+             "Numbat/bulk_CNV_calls/15-109N1.csv")
+```
+
+make consensus calls (2 samples)
+```{r}
+df1 <- read.csv(myfiles[1])
+df2 <- read.csv(myfiles[2])
+combined <- bind_rows(df1, df2) %>% arrange(CHROM, seg_start) %>% select(-seg)
+  
+# Step 1: Combine breakpoints (seg_start and seg_end) from both dataframes
+breakpoints <- combined %>%
+  select(-cnv_state) %>%
+  pivot_longer(cols = c(seg_start, seg_end), names_to = "type", values_to = "position") %>%
+  arrange(CHROM, position) %>%
+  distinct() 
+
+# Step 2: Create new segments based on breakpoints
+new_segments <- breakpoints %>%
+  group_by(CHROM) %>%
+  mutate(next_break = lead(position), 
+         next_break1 = next_break-1) %>%
+  filter(!is.na(next_break), position != next_break1) %>%
+  rename(seg_start = position, seg_end = next_break) %>%
+  select(-type, -next_break1)
+
+#combine states
+all_states <- data.frame()
+for(i in 1:nrow(new_segments)){
+  start <- new_segments$seg_start[i]
+  end <- new_segments$seg_end[i]
+  chr <- new_segments$CHROM[i]
+  
+  sample1_state <- filter(df1, CHROM==chr, seg_start<=start, seg_end>=end) %>% pull(cnv_state)
+  sample2_state <- filter(df2, CHROM==chr, seg_start<=start, seg_end>=end) %>% pull(cnv_state)
+  
+  states <- data.frame(CHROM=chr, seg_start=start, seg_end=end, sample1_state=sample1_state, sample2_state=sample2_state)
+  all_states <- rbind(all_states, states)
+}
+
+#rules for which state to use as consensus
+consensus_states <- all_states %>%
+  mutate(cnv_state = ifelse(sample1_state == sample2_state, sample1_state,
+                     ifelse((sample1_state=="amp"|sample1_state=="bamp")&(sample2_state=="del"|sample2_state=="bdel"), "neu",
+                     ifelse(sample1_state == "amp"|sample2_state=="amp", "amp", 
+                     ifelse(sample1_state=="loh"|sample2_state=="loh", "loh",
+                     ifelse(sample1_state == "del"|sample2_state=="del", "del", 
+                     ifelse(sample1_state=="bamp"|sample2_state=="bamp", "bamp", 
+                     ifelse(sample1_state=="bdel"|sample2_state=="bdel", "bdel", 
+                            "neu"))))))))
+
+#format for numbat
+numbat_consensus <- consensus_states %>%
+  select(CHROM, seg_start, seg_end, cnv_state) %>%
+  arrange(CHROM, seg_start) %>%
+  group_by(CHROM) %>%
+  mutate(sequential = row_number(), 
+         seg = paste0(CHROM,"_", sequential)) %>% ungroup() %>%
+  select(CHROM, seg, seg_start, seg_end, cnv_state)
+
+#write out
+write.csv(numbat_consensus, paste0("Numbat/bulk_CNV_calls/",patient,"_combined_calls.csv"))
+```
+
+visualize (2 samples)
+```{r}
+state_cols <- c("amp"="pink","bamp"="red", "neu"="grey", "del"="skyblue", "bdel"="navy","loh"="forestgreen")
+
+consensus_states %>%
+  ggplot() +
+    geom_rect(aes(xmin=seg_start, xmax=seg_end, fill=sample1_state, ymin=0.5, ymax=1.5)) +
+    geom_rect(aes(xmin=seg_start, xmax=seg_end, fill=sample2_state, ymin=2.5, ymax=3.5)) +
+    geom_rect(aes(xmin=seg_start, xmax=seg_end, fill=cnv_state, ymin=4.5, ymax=5.5)) +
+    geom_vline(aes(xintercept=seg_start), linewidth=0.05) +
+    theme_classic() +
+    scale_y_continuous(breaks=c(1,3,5), labels=c(substr(samples[1],7,8), substr(samples[2],7,8), "CB")) +
+    scale_fill_manual(values=state_cols) +
+    facet_wrap(~CHROM, scales="free") +
+    labs(title=paste0("Consensus CNV calls for ",patient), fill="cnv")
+ggsave(paste0("Numbat/bulk_CNV_calls/",patient,"_combined_calls.tiff"), width=12, height=8)
+```
+
+make consensus calls (3 samples)
+```{r}
+df1 <- read.csv(myfiles[1])
+df2 <- read.csv(myfiles[2])
+df3 <- read.csv(myfiles[3])
+combined <- bind_rows(df1, df2, df3) %>% arrange(CHROM, seg_start) %>% select(-seg)
+  
+# Step 1: Combine breakpoints (seg_start and seg_end) from both dataframes
+breakpoints <- combined %>%
+  select(-cnv_state) %>%
+  pivot_longer(cols = c(seg_start, seg_end), names_to = "type", values_to = "position") %>%
+  arrange(CHROM, position) %>%
+  distinct() 
+
+# Step 2: Create new segments based on breakpoints
+new_segments <- breakpoints %>%
+  group_by(CHROM) %>%
+  mutate(next_break = lead(position), 
+         next_break1 = next_break-1) %>%
+  filter(!is.na(next_break), position != next_break1) %>%
+  rename(seg_start = position, seg_end = next_break) %>%
+  select(-type, -next_break1)
+
+#combine states
+all_states <- data.frame()
+for(i in 1:nrow(new_segments)){
+  start <- new_segments$seg_start[i]
+  end <- new_segments$seg_end[i]
+  chr <- new_segments$CHROM[i]
+  
+  sample1_state <- filter(df1, CHROM==chr, seg_start<=start, seg_end>=end) %>% pull(cnv_state)
+  sample2_state <- filter(df2, CHROM==chr, seg_start<=start, seg_end>=end) %>% pull(cnv_state)
+  sample3_state <- filter(df3, CHROM==chr, seg_start<=start, seg_end>=end) %>% pull(cnv_state)
+  
+  states <- data.frame(CHROM=chr, seg_start=start, seg_end=end, sample1_state=sample1_state, sample2_state=sample2_state, sample3_state=sample3_state)
+  all_states <- rbind(all_states, states)
+}
+
+#rules for which state to use as consensus
+consensus_states <- all_states %>%
+  mutate(cnv_state = ifelse(sample1_state == sample2_state & sample2_state== sample3_state, sample1_state,
+                     ifelse((sample1_state=="amp"|sample1_state=="bamp")&(sample2_state=="del"|sample2_state=="bdel"), "neu",
+                     ifelse((sample1_state=="amp"|sample1_state=="bamp")&(sample3_state=="del"|sample3_state=="bdel"), "neu",
+                     ifelse((sample2_state=="amp"|sample2_state=="bamp")&(sample2_state=="del"|sample2_state=="bdel"), "neu",
+                     ifelse(sample1_state == "amp"|sample2_state=="amp"|sample3_state=="amp", "amp", 
+                     ifelse(sample1_state=="loh"|sample2_state=="loh"|sample3_state=="loh", "loh",
+                     ifelse(sample1_state == "del"|sample2_state=="del"|sample3_state=="del", "del", 
+                     ifelse(sample1_state=="bamp"|sample2_state=="bamp"|sample3_state=="bamp", "bamp", 
+                     ifelse(sample1_state=="bdel"|sample2_state=="bdel"|sample3_state=="bdel", "bdel", 
+                            "?"))))))))))
+
+#format for numbat
+numbat_consensus <- consensus_states %>%
+  select(CHROM, seg_start, seg_end, cnv_state) %>%
+  arrange(CHROM, seg_start) %>%
+  group_by(CHROM) %>%
+  mutate(sequential = row_number(), 
+         seg = paste0(CHROM,"_", sequential)) %>% ungroup() %>%
+  select(CHROM, seg, seg_start, seg_end, cnv_state)
+
+#write out
+write.csv(numbat_consensus, paste0("Numbat/bulk_CNV_calls/",patient,"_combined_calls.csv"))
+```
+
+visualize (3 samples)
+```{r}
+state_cols <- c("amp"="pink","bamp"="red", "neu"="grey", "del"="skyblue", "bdel"="navy","loh"="forestgreen")
+
+consensus_states %>%
+  ggplot() +
+    geom_rect(aes(xmin=seg_start, xmax=seg_end, fill=sample1_state, ymin=0.5, ymax=1.5)) +
+    geom_rect(aes(xmin=seg_start, xmax=seg_end, fill=sample2_state, ymin=2.5, ymax=3.5)) +
+    geom_rect(aes(xmin=seg_start, xmax=seg_end, fill=sample3_state, ymin=4.5, ymax=5.5)) +
+    geom_rect(aes(xmin=seg_start, xmax=seg_end, fill=cnv_state, ymin=6.5, ymax=7.5)) +
+    geom_vline(aes(xintercept=seg_start), linewidth=0.05) +
+    theme_classic() +
+    scale_y_continuous(breaks=c(1,3,5,7), labels=c(substr(samples[1],7,8), substr(samples[2],7,8),substr(samples[3],7,8), "CB")) +
+    scale_fill_manual(values=state_cols) +
+    facet_wrap(~CHROM, scales="free") +
+    labs(title=paste0("Consensus CNV calls for ",patient), fill="cnv")
+ggsave(paste0("Numbat/bulk_CNV_calls/",patient,"_combined_calls.tiff"), width=12, height=8)
+```

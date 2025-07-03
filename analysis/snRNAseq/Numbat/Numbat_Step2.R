@@ -1,0 +1,126 @@
+library(yaml)
+args <- commandArgs(trailingOnly = TRUE)
+
+# Load YAML file
+yaml_data <- yaml::read_yaml("Numbat/scripts/step2_runnumbat/2025_newruns/samples_ncuttau.yml")
+
+# Get patient ID from command-line argument
+if (length(args) < 1) {
+  stop("Usage: Rscript Step2_v1_general.R <patient_id>")
+}
+patient <- args[1]
+if (!patient %in% names(yaml_data$samples)) {
+  stop(paste("Patient", patient, "not found in YAML file."))
+}
+
+# Extract patient-specific data
+patient_data <- yaml_data$samples[[patient]]
+samples <- patient_data$samps
+pileup_files <- patient_data$pileup_files
+segs_file <- patient_data$segs_file
+out_path <- patient_data$out_path
+n_cut <- patient_data$n_cut
+tau <- patient_data$tau
+
+cat("Patient:",patient, "\nSamples:", samples, "\n\nPileup Files:", pileup_files, "\n\nSegs file:", segs_file, "\n\n")
+
+library(Seurat)
+library(Matrix)
+library(numbat)
+library(tidyverse)
+
+############################################################################################################################
+#if only one sample:
+if(length(pileup_files)==1){
+  combined_allele_counts <- read.table(pileup_files[1], 
+                                       header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+}
+
+#if 2 samples, combine pileup_files:
+if(length(pileup_files)==2){
+allele_1 <- read.table(pileup_files[1], 
+                        header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+allele_2 <- read.table(pileup_files[2], 
+                        header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+combined_allele_counts <- bind_rows(allele_1, allele_2)
+}
+
+#if 3 samples, combine pileup_files:
+if(length(pileup_files)==3){
+  allele_1 <- read.table(pileup_files[1], 
+                         header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  allele_2 <- read.table(pileup_files[2], 
+                         header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  allele_3 <- read.table(pileup_files[3], 
+                         header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  combined_allele_counts <- bind_rows(bind_rows(allele_1, allele_2), allele_3)
+}
+
+############################################################################################################################
+
+#make count x cell matrix for this patient
+seurat1000_noD <- readRDS("Numbat/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+
+seurat_sample <- subset(seurat1000_noD, subset=sampleName %in% samples)
+count_mat <- GetAssayData(seurat_sample, layer="counts")
+count_mat <- as(count_mat, "dgCMatrix")
+
+#make sure df_allele and count_mat have the same exact cells
+common_cells <- intersect(combined_allele_counts$cell, colnames(count_mat))
+combined_allele_counts <- combined_allele_counts[combined_allele_counts$cell %in% common_cells, ]
+count_mat <- count_mat[, common_cells]
+
+# Ensure all cells in combined_allele_counts are in the count matrix
+matching_cells <- all(colnames(count_mat) %in% combined_allele_counts$cell)
+matching_cells_2 <- all(combined_allele_counts$cell %in% colnames(count_mat))
+cat("\n\nAfter subsetting,\nAll seurat obj cells are in pileup results: ", matching_cells, "\nAll pileup result cells are in seurat obj:", matching_cells_2,"\n")
+ 
+############################################################################################################################
+ 
+### make the reference in R using same dataset Tcell, Bcell, Endothelial cells 
+cell_types <- seurat_sample@meta.data %>% select(cell_type)
+ref_cell_types <- c("T_cells", "B_cell", "Monocyte", "Macrophage", "Endothelial_cells", "Hepatocytes")
+
+ref_cells <- rownames(cell_types)[cell_types$cell_type %in% ref_cell_types]
+seurat_ref <- subset(seurat_sample, cells = ref_cells)
+
+count_mat_selected <- GetAssayData(seurat_ref, layer = "counts")
+cell_annot_selected <- data.frame(
+    cell = ref_cells,
+    group = cell_types[ref_cells, "cell_type"]
+)
+ 
+ref_internal_selected <- numbat::aggregate_counts(count_mat_selected, cell_annot_selected)
+ref_internal_matrix <- as.matrix(ref_internal_selected)
+ 
+ 
+############################################################################################################################
+ 
+ 
+# Find the common genes between count_mat and ref_internal
+common_genes <- intersect(rownames(count_mat), rownames(ref_internal_matrix))
+ 
+# Subset both the count matrix and the reference to these common genes
+count_mat <- count_mat[common_genes, ]
+ref_internal_matrix <- ref_internal_matrix[common_genes, ]
+ 
+options(bitmapType='cairo')  # Use cairo as the backend for plots
+out_dir <- paste0(out_path, patient)
+segs_consensus_fix <- read.csv(segs_file)
+
+cat("\n\nRunning Numbat (v1 count_mat from seurat object, combined bulk CNV input):")
+ 
+# Run Numbat without the bulk CNV calls
+out <- run_numbat(
+    count_mat,                  # gene x cell integer UMI count matrix
+    ref_internal_matrix,        # reference expression profile
+    combined_allele_counts,                  # allele dataframe generated by pileup_and_phase script
+    genome = "hg38",            # genome version
+    t = 1e-5,                   # threshold parameter
+    ncores = 8,                 # number of cores
+    plot = TRUE,                # whether to plot results
+    out_dir = out_dir,
+    n_cut = n_cut,
+    tau = tau,
+    segs_consensus_fix = segs_consensus_fix # existing CNV calls
+)

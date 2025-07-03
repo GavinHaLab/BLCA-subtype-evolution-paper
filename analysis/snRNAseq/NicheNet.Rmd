@@ -1,0 +1,426 @@
+---
+title: "nicheNet"
+output: html_document
+date: "2024-09-03"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(SeuratObject)
+library(nichenetr)
+library(pals)
+library(viridis)
+library(ggpubr)
+library(rstatix)
+library(tidyverse)
+
+set.seed(42)
+```
+
+import seurat objects
+```{r}
+seurat1000_noD <- readRDS("seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+
+cell_types7 <- seurat1000_noD@meta.data %>% 
+  select(cell_type) %>%
+  mutate(cell_type7 = case_match(cell_type, "Monocyte"~"Myeloid", "Macrophage"~"Myeloid", .default = cell_type))
+seurat1000_noD <- AddMetaData(seurat1000_noD, cell_types7)
+
+seurat1000_noD <- RegroupIdents(seurat1000_noD, metadata = "cell_type7") #need to set Idents to cell_type to run NicheNet
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD"="#43823D",
+              "Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220", 
+              "Targeted"="#F8766D", "WGS"="#00BFC4")
+cell_colors <- c("Epithelial_cells"="#ffe119", "Fibroblasts"="#4363d8", "B_cell"="#e6194b", "T_cells"="#f032e6", "Macrophage"="#911eb4", "Monocyte"="#42d4f4","Myeloid"="#42d4f4", "Endothelial_cells"="#3cb44b", "Hepatocytes"="#f58231")
+
+ann_df <- seurat1000_noD@meta.data %>%
+  select(sampleName, patient, histology, sex, met_site) %>%
+  distinct()
+```
+
+read in NicheNet networks
+```{r}
+#download from these links & move rds files to directory
+#lr_network <- https://zenodo.org/record/7074291/files/lr_network_human_21122021.rds
+#ligand_target_matrix <- https://zenodo.org/record/7074291/files/ligand_target_matrix_nsga2r_final.rds
+#weighted_networks <- https://zenodo.org/record/7074291/files/weighted_networks_nsga2r_final.rds
+
+lr_network <- readRDS("NicheNet/lr_network_human_21122021.rds")
+ligand_target_matrix <- readRDS("NicheNet/ligand_target_matrix_nsga2r_final.rds")
+weighted_networks <- readRDS("NicheNet/weighted_networks_nsga2r_final.rds")
+
+lr_network <- lr_network %>% distinct(from, to)
+head(lr_network)
+
+ligand_target_matrix[1:5,1:5] # target genes in rows, ligands in columns
+
+head(weighted_networks$lr_sig) # interactions and their weights in the ligand-receptor + signaling network
+
+head(weighted_networks$gr) # interactions and their weights in the gene regulatory network
+```
+
+get expressed ligand & receptor gene lists
+```{r}
+wd <- 'scRNAseq/NicheNet/T_cell_PUC/'
+figs <- 'Figure6/raw_images/NicheNet/'
+
+receiver <- "T_cells"
+
+#sender-agnostic
+expressed_genes_receiver <- get_expressed_genes(receiver, seurat1000_noD, pct = 0.05) #list of genes expressed in >5% of receiver cells
+all_receptors <- unique(lr_network$to) #list all receptors in db
+expressed_receptors <- intersect(all_receptors, expressed_genes_receiver) #list of receptors expressed in >5% of receiver cells
+potential_ligands <- lr_network %>% filter(to %in% expressed_receptors) %>% pull(from) %>% unique() #list of ligands that relate to the expressed receptors
+
+#sender-focused
+sender_celltypes <- c("Epithelial_cells", "Fibroblasts")
+list_expressed_genes_sender <- sender_celltypes %>% unique() %>% lapply(get_expressed_genes, seurat1000_noD, 0.05) # Use lapply to get the expressed genes of every sender cell type
+expressed_genes_sender <- list_expressed_genes_sender %>% unlist() %>% unique() 
+potential_ligands_focused <- intersect(potential_ligands, expressed_genes_sender) #list of ligands expressed in >5% of sender cells
+```
+
+define gene set of interest
+```{r}
+#set comparison to be made (by histology)
+condition_oi <-  "PUC"
+condition_reference <- "UC"
+
+#do DEG on UC vs PUC, in receiver cells
+seurat_obj_receiver <- subset(seurat1000_noD, idents = receiver)
+
+DE_table_receiver <-  FindMarkers(object = seurat_obj_receiver,
+                                  ident.1 = condition_oi, ident.2 = condition_reference,
+                                  group.by = "histology",
+                                  min.pct = 0.05) %>% rownames_to_column("gene")
+DE_table_receiver<- DE_table_receiver%>%
+  mutate(percent_diff = pct.1-pct.2)
+
+#list of upregulated genes in PUC receiver cells (that are in ligand db)
+geneset_oi <- DE_table_receiver %>% filter(p_val_adj <= 0.05 & abs(avg_log2FC) >= 1) %>% pull(gene)
+geneset_oi <- geneset_oi %>% .[. %in% rownames(ligand_target_matrix)]
+
+#background gene list
+background_expressed_genes <- expressed_genes_receiver %>% .[. %in% rownames(ligand_target_matrix)]
+```
+
+run NicheNet analysis (sender agnostic approach)
+```{r}
+#get ligand activities (from any sender cell)
+ligand_activities <- predict_ligand_activities(geneset = geneset_oi,
+                                               background_expressed_genes = background_expressed_genes,
+                                               ligand_target_matrix = ligand_target_matrix,
+                                               potential_ligands = potential_ligands)
+ligand_activities <- ligand_activities %>% arrange(-aupr_corrected) %>% mutate(rank = rank(desc(aupr_corrected)))
+
+#check distribution of ligand activity values to set cutoff (cutoff should be higher than main peak?)
+ggplot(ligand_activities, aes(x=aupr_corrected)) + 
+  geom_histogram(color="black", fill="darkorange", binwidth = .001)  + 
+  geom_vline(aes(xintercept=min(ligand_activities %>% top_n(20, aupr_corrected) %>% pull(aupr_corrected))),
+             color="red", linetype="dashed", linewidth=1) + 
+  labs(x="ligand activity (PCC)", y = "# ligands") +
+  theme_classic()
+
+#pull top 20 ligands (default is 30, but seems reasonable to go lower)
+best_upstream_ligands <- ligand_activities %>% top_n(20, aupr_corrected) %>% arrange(-aupr_corrected) %>% pull(test_ligand)
+
+#visualize ligand activity measure (AUPR) of top ligands:
+vis_ligand_aupr <- ligand_activities %>% filter(test_ligand %in% best_upstream_ligands) %>%
+  column_to_rownames("test_ligand") %>% select(aupr_corrected) %>% arrange(aupr_corrected) %>% as.matrix(ncol = 1)
+
+(make_heatmap_ggplot(vis_ligand_aupr,
+                     "Prioritized ligands", "Ligand activity", 
+                     legend_title = "AUPR", color = "darkorange") + 
+    theme(axis.text.x.top = element_blank()))  
+
+
+##LIGAND-TARGET INTERACTIONS##
+#get targets for these 20 best ligands
+active_ligand_target_links_df <- best_upstream_ligands %>%
+  lapply(get_weighted_ligand_target_links,
+         geneset = geneset_oi,
+         ligand_target_matrix = ligand_target_matrix,
+         n = 200) %>% #default = 200, vignette uses 100 to shorten result to 637 rows
+  bind_rows() %>% drop_na()
+
+#ligand-target visualization
+active_ligand_target_links <- prepare_ligand_target_visualization(
+  ligand_target_df = active_ligand_target_links_df,
+  ligand_target_matrix = ligand_target_matrix,
+  cutoff = 0.33) #use cutoff of 33rd percentile of regulatory potential scores (default=0.25)
+order_ligands <- intersect(best_upstream_ligands, colnames(active_ligand_target_links)) %>% rev()
+order_targets <- active_ligand_target_links_df$target %>% unique() %>% intersect(rownames(active_ligand_target_links))
+vis_ligand_target <- t(active_ligand_target_links[order_targets,order_ligands])
+make_heatmap_ggplot(vis_ligand_target, "Prioritized ligands", "Predicted target genes",
+                    color = "purple", legend_title = "Regulatory potential") +
+  scale_fill_gradient2(low = "whitesmoke",  high = "purple")
+
+
+##LIGAND-RECEPTOR INTERACTIONS##
+ligand_receptor_links_df <- get_weighted_ligand_receptor_links(
+  best_upstream_ligands, expressed_receptors,
+  lr_network, weighted_networks$lr_sig)
+vis_ligand_receptor_network <- prepare_ligand_receptor_visualization(
+  ligand_receptor_links_df,
+  best_upstream_ligands,
+  order_hclust = "both") 
+(make_heatmap_ggplot(t(vis_ligand_receptor_network), 
+                     y_name = "Ligands", x_name = "Receptors",  
+                     color = "mediumvioletred", legend_title = "Prior interaction potential"))
+```
+
+run NicheNet analysis (sender focused approach)
+```{r}
+#rename agnostic values
+# ligand_activities_all <- ligand_activities 
+# best_upstream_ligands_all <- best_upstream_ligands
+
+#filter ligand activities to sender-focused ligands
+ligand_activities <- predict_ligand_activities(geneset = geneset_oi,
+                                               background_expressed_genes = background_expressed_genes,
+                                               ligand_target_matrix = ligand_target_matrix,
+                                               potential_ligands = potential_ligands_focused)
+ligand_activities <- ligand_activities %>% arrange(-aupr_corrected) %>% mutate(rank = rank(desc(aupr_corrected)))
+
+#check distribution of ligand activity values to set cutoff
+ggplot(ligand_activities, aes(x=aupr_corrected)) + 
+  geom_histogram(color="black", fill="darkorange", binwidth = .001)  + 
+  geom_vline(aes(xintercept=min(ligand_activities %>% top_n(20, aupr_corrected) %>% pull(aupr_corrected))),
+             color="red", linetype="dashed", size=1) + 
+  labs(x="ligand activity (PCC)", y = "# ligands") +
+  theme_classic()
+
+#pull top ligands
+best_upstream_ligands <- ligand_activities %>% top_n(10, aupr_corrected) %>% arrange(-aupr_corrected) %>% pull(test_ligand)
+```
+visualize (NicheNet visualizations)
+```{r}
+#visualize ligand activities
+ligand_aupr_matrix <- ligand_activities %>% filter(test_ligand %in% best_upstream_ligands) %>%
+  column_to_rownames("test_ligand") %>% select(aupr_corrected) %>% arrange(aupr_corrected)
+vis_ligand_aupr <- as.matrix(ligand_aupr_matrix, ncol = 1) 
+p_ligand_aupr <- make_heatmap_ggplot(vis_ligand_aupr,
+                     "Prioritized ligands", "Ligand activity", 
+                     legend_title = "AUPR", color = "darkorange") + 
+    theme(axis.text.x.top = element_blank())
+p_ligand_aupr
+ggsave(paste0(wd, "ligand_aupr_top10.pdf"), width=4, height=5)
+
+#using genes upregulated in PUC vs UC, get ligand-target links
+active_ligand_target_links_df <- best_upstream_ligands %>%
+  lapply(get_weighted_ligand_target_links,
+         geneset = geneset_oi,
+         ligand_target_matrix = ligand_target_matrix,
+         n = 100) %>%
+  bind_rows() %>% drop_na()
+active_ligand_target_links <- prepare_ligand_target_visualization(
+  ligand_target_df = active_ligand_target_links_df[],
+  ligand_target_matrix = ligand_target_matrix,
+  cutoff = 0.5) 
+order_ligands <- intersect(best_upstream_ligands, colnames(active_ligand_target_links)) %>% rev()
+order_targets <- active_ligand_target_links_df$target %>% unique() %>% intersect(rownames(active_ligand_target_links))
+vis_ligand_target <- t(active_ligand_target_links[order_targets,order_ligands])
+ligand_target_df <- as.data.frame(vis_ligand_target) %>% rownames_to_column(var="ligand") %>% pivot_longer(cols=2:(1+ncol(vis_ligand_target)), names_to = "target", values_to = "Regulatory_potential")
+p_ligand_target <- make_heatmap_ggplot(vis_ligand_target, "Prioritized ligands", "Predicted target genes",
+                    color = "purple", legend_title = "Regulatory potential") +
+  scale_fill_gradient2(low = "whitesmoke",  high = "purple")
+p_ligand_target
+ggsave(paste0(wd, "ligand_target_interactions.pdf"), width=12, height=3)
+
+#get ligand target links just for TGFB1
+active_ligand_target_links_df <- best_upstream_ligands %>%
+  lapply(get_weighted_ligand_target_links,
+         geneset = geneset_oi,
+         ligand_target_matrix = ligand_target_matrix,
+         n = 100) %>%
+  bind_rows() %>% drop_na()
+active_ligand_target_links <- prepare_ligand_target_visualization(
+  ligand_target_df = active_ligand_target_links_df[],
+  ligand_target_matrix = ligand_target_matrix,
+  cutoff = 0.5) 
+active_ligand_target_links <- active_ligand_target_links %>% as.data.frame() %>%
+  select(TGFB1) %>%
+  arrange(TGFB1) %>% 
+  filter(TGFB1>0.15) %>% as.matrix()
+p_ligand_target <- make_heatmap_ggplot(active_ligand_target_links, "Prioritized ligands", "Predicted target genes",
+                    color = "purple", legend_title = "Regulatory potential") +
+  scale_fill_gradient2(low = "whitesmoke",  high = "purple", limits = c(0,0.3))
+p_ligand_target
+ggsave(paste0(wd, "TGFB1_target_interactions_2.pdf"), width=3, height=10)
+
+# Receptor plot
+ligand_receptor_links_df <- get_weighted_ligand_receptor_links(
+  best_upstream_ligands, expressed_receptors,
+  lr_network, weighted_networks$lr_sig) 
+vis_ligand_receptor_network <- prepare_ligand_receptor_visualization(
+  ligand_receptor_links_df,
+  best_upstream_ligands,
+  order_hclust = "both") 
+p_ligand_receptor <- make_heatmap_ggplot(t(vis_ligand_receptor_network[,order_ligands]), 
+                     y_name = "Ligands", x_name = "Receptors",  
+                     color = "mediumvioletred", legend_title = "Prior interaction potential")
+p_ligand_receptor
+ggsave(paste0(wd, "ligand_receptor_interactions.pdf"), width=12, height=10)
+
+# Receptor plot for TGFB1
+ligand_receptor_links_df <- get_weighted_ligand_receptor_links(
+  best_upstream_ligands, expressed_receptors,
+  lr_network, weighted_networks$lr_sig) 
+vis_ligand_receptor_network <- prepare_ligand_receptor_visualization(
+  ligand_receptor_links_df,
+  best_upstream_ligands,
+  order_hclust = "both") 
+vis_ligand_receptor_network <- vis_ligand_receptor_network %>% as.data.frame() %>%
+  select(TGFB1) %>%
+  filter(TGFB1 >0) %>%
+  arrange(TGFB1) %>% as.matrix()
+p_ligand_receptor <- make_heatmap_ggplot(vis_ligand_receptor_network, 
+                     y_name = "Ligands", x_name = "Receptors",  
+                     color = "mediumvioletred", legend_title = "Prior interaction potential") +
+  scale_fill_gradient2(low = "whitesmoke",  high = "mediumvioletred",limits = c(0,max(vis_ligand_receptor_network)))
+p_ligand_receptor
+ggsave(paste0(wd, "TGFB1_receptor_interactions.pdf"), width=4, height=7)
+```
+NicheNet combined visualization
+```{r}
+figures_without_legend <- cowplot::plot_grid(
+  p_ligand_aupr + theme(legend.position = "none"),
+  p_dotplot + theme(legend.position = "none",
+                    axis.ticks = element_blank(),
+                    axis.title.y = element_blank(),
+                    axis.title.x = element_text(size = 12),
+                    axis.text.y = element_text(size = 9),
+                    axis.text.x = element_text(size = 9,  angle = 90, hjust = 0)) +
+    ylab("Expression in Sender"),
+  p_lfc + theme(legend.position = "none",
+                axis.title.y = element_blank()),
+  p_ligand_target + theme(legend.position = "none",
+                          axis.title.y = element_blank()),
+  align = "hv",
+  nrow = 1,
+  rel_widths = c(ncol(vis_ligand_aupr)+6, ncol(vis_ligand_lfc)+7, ncol(vis_ligand_lfc)+8, ncol(vis_ligand_target)))
+
+legends <- cowplot::plot_grid(
+    ggpubr::as_ggplot(ggpubr::get_legend(p_ligand_aupr)),
+    ggpubr::as_ggplot(ggpubr::get_legend(p_dotplot)),
+    ggpubr::as_ggplot(ggpubr::get_legend(p_lfc)),
+    ggpubr::as_ggplot(ggpubr::get_legend(p_ligand_target)),
+    nrow = 1,
+    align = "h", rel_widths = c(1.5, 1, 1, 1))
+
+combined_plot <-  cowplot::plot_grid(figures_without_legend, legends, rel_heights = c(10,5), nrow = 2, align = "hv")
+combined_plot
+ggsave("NicheNet/T_cell_PUC.pdf", width=15, height=10)
+```
+
+dotplot of ligands/receptors/targets in cell types/histology
+```{r}
+#all ligands/receptors/targets
+ligands <- ligand_activities[1:20,]$test_ligand
+receptors <- as.data.frame(vis_ligand_receptor_network) %>% rownames_to_column(var="receptor") %>% pivot_longer(cols=2:(1+ncol(vis_ligand_receptor_network)), names_to = "ligand", values_to = "Regulatory_potential") %>% 
+  filter(ligand %in% ligands) %>% pull(receptor) %>% unique()
+targets <- ligand_target_df %>% filter(ligand %in% ligands, Regulatory_potential>0.01) %>% pull(target) %>% unique()
+
+all_markers <- unique(c(ligands, receptors, targets))
+
+#ligand, receptors/targets for top ligand
+ligands <- "TGFB1"
+receptors <- rownames(vis_ligand_receptor_network)
+targets <- rownames(active_ligand_target_links)
+all_markers <- unique(c(ligands, receptors, targets))
+
+#make my own from ggplot
+##get expn data
+expn <- FetchData(seurat1000_noD, vars=all_markers) 
+expn <- expn %>% rownames_to_column(var="cell_id") %>%
+  left_join(seurat1000_noD@meta.data %>% select(sampleName, histology, cell_type7) %>% rownames_to_column(var="cell_id"))
+expn <- expn %>% pivot_longer(cols=c(-cell_id, -sampleName, -histology, -cell_type7), names_to = "gene", values_to = "expn") 
+expn <- expn %>% mutate(log2expn = log2(expn+0.01))
+
+##summarize each gene by cell type
+df1 <- expn %>%
+  filter(expn>0) %>%
+  group_by(gene, histology, cell_type7) %>%
+  summarize(n_over0=n()) %>% ungroup()
+df2 <- expn %>%
+  group_by(gene, histology, cell_type7) %>%
+  summarize(avg_expn = mean(expn),
+            n_cells=n()) %>%
+  left_join(df1) %>%
+  mutate(n_over0 = case_when(is.na(n_over0)~0, .default = n_over0)) %>%
+  mutate(percent_over0 = n_over0/n_cells*100, 
+         cell_histology = paste0(cell_type7, "_", histology)) 
+
+
+##graph ligand from any cell type
+df2 %>% filter(histology %in% c(condition_oi, condition_reference), gene %in% ligands) %>%
+  mutate(gene = factor(gene, levels=all_markers)) %>%
+  ggplot(aes(x=cell_histology, y=gene)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(color="black", angle=60, hjust=1, vjust=1),
+          axis.text.y = element_text(color="black"),
+          rect = element_rect(fill = NULL),
+          axis.ticks = element_line(color="black")) +
+    geom_point(aes(color=avg_expn, size=percent_over0)) + 
+    geom_vline(xintercept = c(2,4,6,8,9,11)+0.5) +
+    scale_color_gradient(low="snow", high="red") +
+    scale_size_area(limits=c(0,4)) +
+    #scale_color_gradient2(low = "snow", mid="gold",high="forestgreen", midpoint = 1.5) +#khaki or gold kind of works well for mid
+    scale_size(range=c(0,6))
+
+##graph only top ligand from any cell type
+df2 %>% 
+  #filter(gene %in% ligands, !cell_type7 %in% c("Hepatocytes")) %>%
+  filter(gene %in% ligands, cell_type7 %in% c("Epithelial_cells", "Fibroblasts")) %>%
+  mutate(histology = factor(histology, levels=c("PUC", "UCSD", "UC"))) %>%
+  ggplot(aes(y=histology, x = cell_type7)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(color="black", angle=60, hjust=1, vjust=1),
+          axis.text.y = element_text(color="black"),
+          rect = element_rect(fill = NULL),
+          axis.ticks = element_line(color="black")) +
+    geom_point(aes(color=avg_expn, size=percent_over0)) + 
+    #scale_color_gradient(low="snow", high="red") +
+    scale_color_gradient2(low = "navy", mid="snow",high="red", midpoint = mean(df2 %>% filter(gene %in% ligands) %>% pull(avg_expn))) + 
+    scale_size(range=c(0,12)) +
+    labs(title="TGFB1 from Sender Cells", y="Histology", x= "Cell Type", size = "% expressed", color="Expression")
+ggsave(paste0(wd, "TGFB1_from_sender_fib-ep.pdf"), width=4, height=7)
+ggsave(paste0(figs, "TGFB1_from_sender_fib-ep.pdf"), width=4, height=7)
+
+##graph receptor in receiver cells
+df2 %>% 
+  filter(gene %in% receptors, cell_type7==receiver) %>% 
+  mutate(gene = factor(gene, levels=all_markers)) %>%
+  ggplot(aes(x=histology, y=gene)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(color="black", angle=60, hjust=1, vjust=1),
+          axis.text.y = element_text(color="black"),
+          rect = element_rect(fill = NULL),
+          axis.ticks = element_line(color="black")) +
+    geom_point(aes(color=avg_expn, size=percent_over0)) + 
+    #scale_color_gradient(low="snow", high="red") +
+    scale_color_gradient2(low = "navy", mid="snow",high="red", midpoint = mean(df2 %>% filter(gene %in% receptors) %>% pull(avg_expn))) + 
+    #scale_color_gradient2(low = "snow", mid="khaki",high="forestgreen", midpoint = mean(df2 %>% filter(gene %in% receptors) %>% pull(avg_expn))) +#khaki or gold kind of works well for mid
+    scale_size(range=c(0,6)) +
+    labs(x="Histology", y= "Receptor", title="TGFB1 Receptors in T cells", size="% expressed", color="Expression")
+ggsave(paste0(wd, "TGFB1_receptors_Tcell_expression.pdf"), width=4, height=6)
+
+##graph target in receiver cells
+df2 %>% filter(gene %in% targets, cell_type7==receiver) %>%
+  filter(gene !="HSPB1") %>% 
+  mutate(gene = factor(gene, levels=all_markers), 
+         histology = factor(histology, levels=c("UC", "UCSD", "PUC"))) %>%
+  ggplot(aes(x=histology, y=gene)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(color="black", angle=60, hjust=1, vjust=1),
+          axis.text.y = element_text(color="black"),
+          rect = element_rect(fill = NULL),
+          axis.ticks = element_line(color="black")) +
+    geom_point(aes(color=avg_expn, size=percent_over0)) + 
+    scale_color_gradient2(low = "navy", mid="snow",high="red", midpoint = 0.2) + 
+    scale_size(range=c(0,8), limits = c(0,40), breaks = c(0,15,30))+
+    labs(x="Histology", y= "Targets", title="TGFB1 Targets in T cells", size="% expressed", color="Expression")
+ggsave(paste0(wd, "TGFB1_targets_Tcell_expression2.pdf"), width=4, height=7)
+ggsave(paste0(figs, "TGFB1_targets_Tcell_expression2.pdf"), width=5, height=7)
+```
+

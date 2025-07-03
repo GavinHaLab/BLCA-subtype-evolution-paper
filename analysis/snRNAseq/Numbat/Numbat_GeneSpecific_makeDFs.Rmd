@@ -1,0 +1,196 @@
+---
+title: "Numbat_GeneSpecific"
+output: html_document
+date: "2024-10-07"
+---
+
+```{r include=FALSE}
+library(Seurat)
+library(pals)
+library(GenomicRanges)
+library(ggpubr)
+library(rstatix)
+library(tidyverse)
+library(numbat)
+```
+
+```{r}
+seurat1000_noD <- readRDS("seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+mydir <- "Numbat/results/plots/"
+summary_dir <- "Numbat/results/plots/summary_19022separate_15109IMNncut6_USE/"
+
+driver_df <- read.csv('drivergene_manual_annotations2.csv')
+drivers <- driver_df$gene
+
+cnv_col <- c("grey", "#CC7A88", "#990F26", "#6B6ECF", "#393B79", "darkgreen")
+cnv_col <- setNames(cnv_col,nm = c("neu", "amp", "bamp", "del", "bdel", "loh"))
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UC_focal"="#ACD7A0","UCSD"="#43823D","UC_UCSD"="#ACD7A0", "SARC"="#D2BEA5")
+clon_col <- c("Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220", "Clonal"="#FEC216", "Subclonal"="#2B3990")
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15_109','16_070','16_097','17_026','17_030','17_071','18_101','18_120','19_007','19_044','15_108','16_079','17_020','17_047','18_016','18_065','19_001','19_004','19_022','19_037'))
+pat_col2 <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+```
+
+### DRIVER GENES ALL PATIENTS ###
+
+dataframes to make bulk_clones_final heatmap/stacked bar graph for all patients (using v1- Seurat object, including bulk calls)
+-only subset to driver genes
+-15-109 with IMN bulk tumor reference, n_cut=6
+-19-022 with H1/I1 run separately
+```{r}
+#input
+ver <- 1
+
+#get coordinates of all genes in hg38
+hg38 <- read_delim("MANE.GRCh38.v1.3.summary.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F)
+chr <- data.frame(GRCh38_chr = sort(unique(filter(hg38, grepl("NC", GRCh38_chr))$GRCh38_chr))[1:22], 
+                  CHROM = c(1:22))
+hg38 <- hg38 %>% filter(grepl("NC", GRCh38_chr)) %>% left_join(chr) %>% select(symbol,GRCh38_chr, CHROM, chr_start, chr_end) %>% filter(!is.na(CHROM))
+
+#all patients
+samps <- c("15_109G5_IMN_ncut6","17_071I1","17_030G1","18_120L1", "16_079", "17_026", "19_007", "19_022H1","19_022I1", "19_044")
+heatmap_df <- data.frame()
+stacked_df <- data.frame()
+for(samp in samps){
+    #per clone cnv calls from bulk
+    bulk_clones <- read_delim(paste0("Numbat/results/R_results_v",ver,"/",samp,"/bulk_clones_final.tsv.gz"), 
+        delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F)
+    cnv_bulk_calls <- bulk_clones %>% filter(!is.na(gene)) %>%
+      select(seg, n_cells, sample, cnv_state_post) %>% distinct() %>%
+      rename("clone_id"="sample")
+    segs_consensus <- read_delim(paste0("Numbat/results/R_results_v",ver,"/",samp,"/segs_consensus_2.tsv"), 
+        delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F)
+    cnv_bulk_calls <- cnv_bulk_calls %>% left_join(segs_consensus %>% select(seg, CHROM, seg_start, seg_end))
+    
+    #match overlapping seg to each gene
+    gene_segs <- hg38 %>%
+      filter(symbol %in% drivers) %>%
+      select(-GRCh38_chr) %>%
+      dplyr::rename(gene_start=chr_start, gene_end=chr_end, chr=CHROM) %>%
+      rowwise() %>%
+      mutate(seg = ifelse(
+        segs_consensus %>% filter(CHROM==chr, seg_start<gene_start, seg_end>gene_end) %>% pull(seg) %>% length()>0, 
+        segs_consensus %>% filter(CHROM==chr, seg_start<gene_start, seg_end>gene_end) %>% pull(seg), 
+        NA
+      )) %>% ungroup() %>%
+      left_join(segs_consensus %>% select(seg, CHROM, seg_start, seg_end)) 
+    
+    #cross join gene-seg to seg-cell
+    gene_clone_calls <- left_join(gene_segs %>% select(symbol,chr, seg), cnv_bulk_calls, by="seg",relationship = "many-to-many") %>% distinct()
+    
+    #add per cell information
+    if(nchar(samp)==8){
+      cell_ids <- seurat1000_noD@meta.data %>% filter(sampleName == samp) %>% rownames_to_column(var="cell") %>% select(cell, cell_type)
+    } else{
+      cell_ids <- seurat1000_noD@meta.data %>% filter(patient == samp) %>% rownames_to_column(var="cell") %>% select(cell, cell_type)
+    }
+    
+    clone_post <- read_delim(paste0("Numbat/results/R_results_v",ver,"/",samp,"/clone_post_2.tsv"), 
+        delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F) 
+    cell_ids <- cell_ids %>% left_join(clone_post %>% select(cell, clone_opt) %>% rename("clone_id"="clone_opt"))
+    #which clones are tumor - subset to those
+    tumor_clones <- clone_post %>% select(clone_opt, compartment_opt) %>% rename(clone_id=clone_opt) %>% group_by(clone_id) %>% count(compartment_opt) %>% arrange(clone_id, desc(n)) %>% slice(1) %>% ungroup() %>% filter(compartment_opt=="tumor") %>% pull(clone_id)
+    clone_post %>% filter(clone_opt==1) %>% select(cell, clone_opt,compartment_opt, p_opt, GT_opt, p_cnv, p_cnv_x, p_cnv_y) %>% filter(compartment_opt=="tumor")
+    clone_post  %>% select(clone_opt,compartment_opt) %>% table()
+    
+    #pull out % cells with each cnv call
+    
+    #graph- stacked bar graphs
+    df <- gene_clone_calls %>% 
+      filter(clone_id %in% tumor_clones) %>%
+      mutate(clone_id = factor(clone_id, levels=rev(tumor_clones)), 
+             sample = samp) %>%
+      arrange(symbol, clone_id) 
+    stacked_df <- rbind(stacked_df, df)
+    
+    print(paste0(samp, " is done"))
+}
+
+
+#write.csv(stacked_df, paste0(mydir, "/BulkClonesFinal_Stacked_All_Driver3_v1_19022separate_15109IMNncut6.csv"), row.names=F)
+```
+
+
+### ALL GENES ###
+
+dataframes to make bulk_clones_final heatmap/stacked bar graph for all patients (using v1- Seurat object, including bulk calls)
+-ALL GENES
+-15-109 with IMN bulk tumor reference, n_cut=6
+-19-022 with H1/I1 run separately
+```{r}
+#input
+ver <- 1
+
+#get coordinates of all genes in hg38
+hg38 <- read_delim("MANE.GRCh38.v1.3.summary.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F)
+chr <- data.frame(GRCh38_chr = sort(unique(filter(hg38, grepl("NC", GRCh38_chr))$GRCh38_chr))[1:22], 
+                  CHROM = c(1:22))
+hg38 <- hg38 %>% filter(grepl("NC", GRCh38_chr)) %>% left_join(chr) %>% select(symbol,GRCh38_chr, CHROM, chr_start, chr_end) %>% filter(!is.na(CHROM))
+
+#all patients
+samps <- c("15_109G5_IMN_ncut6","17_071I1","17_030G1","18_120L1", "16_079", "17_026", "19_007", "19_022H1","19_022I1", "19_044")
+heatmap_df <- data.frame()
+stacked_df_all <- data.frame()
+for(samp in samps){
+    #per clone cnv calls from bulk
+    bulk_clones <- read_delim(paste0("Numbat/results/R_results_v",ver,"/",samp,"/bulk_clones_final.tsv.gz"), 
+        delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F)
+    cnv_bulk_calls <- bulk_clones %>% filter(!is.na(gene)) %>%
+      select(seg, n_cells, sample, cnv_state_post) %>% distinct() %>%
+      rename("clone_id"="sample")
+    segs_consensus <- read_delim(paste0("Numbat/results/R_results_v",ver,"/",samp,"/segs_consensus_2.tsv"), 
+        delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F)
+    cnv_bulk_calls <- cnv_bulk_calls %>% left_join(segs_consensus %>% select(seg, CHROM, seg_start, seg_end))
+    
+    #match overlapping seg to each gene
+    gene_segs <- hg38 %>%
+      select(-GRCh38_chr) %>%
+      dplyr::rename(gene_start=chr_start, gene_end=chr_end, chr=CHROM) %>%
+      rowwise() %>%
+      mutate(seg = ifelse(
+        segs_consensus %>% filter(CHROM==chr, seg_start<gene_start, seg_end>gene_end) %>% pull(seg) %>% length()>0, 
+        segs_consensus %>% filter(CHROM==chr, seg_start<gene_start, seg_end>gene_end) %>% pull(seg), 
+        NA
+      )) %>% ungroup() %>%
+      left_join(segs_consensus %>% select(seg, CHROM, seg_start, seg_end)) 
+    
+    #cross join gene-seg to seg-cell
+    gene_clone_calls <- left_join(gene_segs %>% select(symbol,chr, seg), cnv_bulk_calls, by="seg",relationship = "many-to-many") %>% distinct()
+    
+    #add per cell information
+    if(nchar(samp)==8){
+      cell_ids <- seurat1000_noD@meta.data %>% filter(sampleName == samp) %>% rownames_to_column(var="cell") %>% select(cell, cell_type)
+    } else{
+      cell_ids <- seurat1000_noD@meta.data %>% filter(patient == samp) %>% rownames_to_column(var="cell") %>% select(cell, cell_type)
+    }
+    
+    clone_post <- read_delim(paste0("Numbat/results/R_results_v",ver,"/",samp,"/clone_post_2.tsv"), 
+        delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F) 
+    cell_ids <- cell_ids %>% left_join(clone_post %>% select(cell, clone_opt) %>% rename("clone_id"="clone_opt"))
+    #which clones are tumor - subset to those
+    tumor_clones <- clone_post %>% select(clone_opt, compartment_opt) %>% rename(clone_id=clone_opt) %>% group_by(clone_id) %>% count(compartment_opt) %>% arrange(clone_id, desc(n)) %>% slice(1) %>% ungroup() %>% filter(compartment_opt=="tumor") %>% pull(clone_id)
+    clone_post %>% filter(clone_opt==1) %>% select(cell, clone_opt,compartment_opt, p_opt, GT_opt, p_cnv, p_cnv_x, p_cnv_y) %>% filter(compartment_opt=="tumor")
+    clone_post  %>% select(clone_opt,compartment_opt) %>% table()
+    
+    #pull out % cells with each cnv call
+    
+    #graph- stacked bar graphs
+    df <- gene_clone_calls %>% 
+      filter(clone_id %in% tumor_clones) %>%
+      mutate(clone_id = factor(clone_id, levels=rev(tumor_clones)), 
+             sample = samp) %>%
+      arrange(symbol, clone_id) 
+    stacked_df_all <- rbind(stacked_df_all, df)
+    
+    cat(paste0(samp, " is done"))
+}
+
+#write.csv(stacked_df_all, paste0(summary_dir, "BulkClonesFinal_Stacked_AllGenes_v1_19022separate_15109IMNncut6.csv"), row.names=F)
+```

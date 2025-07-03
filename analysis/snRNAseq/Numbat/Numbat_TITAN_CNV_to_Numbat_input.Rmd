@@ -1,0 +1,101 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-09-05"
+---
+library
+```{r}
+library(tidyverse)
+options(scipen = 999)
+```
+
+
+numbat input: 
+-CHROM: integer; chromosome (1-22)
+-seg: character; segment ID (e.g. 1a, 1b, 2a, 2b, etc.)
+-seg_start: integer; segment start position
+-seg_end: integer; segment end position
+-cnv_state: character; copy number state (neu, del, amp, loh, bamp, bdel)
+```{r}
+CNV_calls_numbat_format <- function(x,y){
+  titan <- read_delim(x)
+  sample <- y
+  
+  numbat <- titan %>% select(Chromosome, Start, End, Corrected_MajorCN, Corrected_MinorCN) %>%
+    filter(Chromosome != "chrX") %>%
+    mutate(Chromosome = as.numeric(sub("chr", "", Chromosome))) %>%
+    mutate(cnv_state = ifelse(Corrected_MajorCN == 1 & Corrected_MinorCN == 1, "neu", 
+                              ifelse(Corrected_MajorCN == 0 & Corrected_MinorCN == 0, "bdel", 
+                                     ifelse(Corrected_MajorCN + Corrected_MinorCN == 1, "del", 
+                                            ifelse(Corrected_MajorCN>=1 & Corrected_MinorCN == 0, "loh", 
+                                                   ifelse(Corrected_MajorCN > 1 & Corrected_MinorCN == 1 & Corrected_MajorCN+Corrected_MinorCN >2, "amp", 
+                                                          ifelse(Corrected_MajorCN>1 & Corrected_MinorCN>1, "bamp", NA))))))) %>%
+    select(-Corrected_MajorCN, -Corrected_MinorCN) %>%
+    select(Chromosome, Start, End, cnv_state)
+  
+  #add rows for beginning & end of chromosomes
+  chromosome_ends <- data.frame(
+    Chromosome = c(1:22),
+    Chromosome_End = c(248956422,242193529,198295559,190214555,181538259,
+          170805979,159345973,145138636,138394717,133797422,
+          135086622,133275309,114364328,107043718,101991189,
+          90338345,83257441,80373285,58617616,64444167,
+          46709983,50818468) 
+  )
+  start_gaps <- numbat %>%
+    group_by(Chromosome) %>%
+    summarise(min_start = min(Start)) %>%
+    mutate(Start = 0, 
+           End = min_start-1, 
+           cnv_state="neu") %>%
+    select(Chromosome, Start, End, cnv_state)
+  end_gaps <- numbat %>%
+    group_by(Chromosome) %>%
+    summarise(max_end = max(End)) %>%
+    left_join(chromosome_ends) %>%
+    mutate(Start = max_end +1, 
+           End=Chromosome_End,
+           cnv_state="neu")%>%
+    select(Chromosome, Start, End, cnv_state)
+  
+  #add rows for middle gaps
+  mid_gaps <- numbat %>%
+    arrange(Chromosome, Start) %>%
+    group_by(Chromosome) %>%
+    arrange(Start) %>%
+    mutate(next_start = lead(Start), 
+           gap_start = End + 1, 
+           gap_end = lead(Start)-1) %>%
+    filter(gap_start<next_start) %>%
+    select(Chromosome, Start=gap_start, End=gap_end) %>%
+    mutate(cnv_state = "neu") %>%
+    ungroup()
+    
+  
+  #add new rows to df
+  numbat_complete <- rbind(numbat, start_gaps, end_gaps, mid_gaps) %>%
+    arrange(Chromosome, Start) %>%
+    group_by(Chromosome) %>%
+    mutate(sequential = row_number(), 
+           seg = paste0(Chromosome,"_", sequential)) %>% ungroup() %>%
+    select(Chromosome, seg, Start, End, cnv_state)
+  #correct col names
+  colnames(numbat_complete) <- c("CHROM", "seg", "seg_start", "seg_end", "cnv_state")
+  
+  #write out
+  f <- paste0("Numbat/bulk_CNV_calls/", sample, ".csv")
+  write.csv(numbat_complete, f, row.names = F)
+}
+```
+
+```{r}
+#WGS files
+myfiles <- c("17-030G1_cluster2.titan.ichor.seg.txt", "17-071I2_cluster1.titan.ichor.seg.txt","18-120L1_cluster1.titan.ichor.seg.txt","19-007D5_cluster1.titan.ichor.seg.txt","19-007K3_cluster1.titan.ichor.seg.txt","19-022H1_cluster1.titan.ichor.seg.txt","19-022I1_cluster2.titan.ichor.seg.txt","19-044G2_cluster1.titan.ichor.seg.txt","19-044K3_cluster2.titan.ichor.seg.txt"
+             )
+samples <- c("17-030G1", "17-071I1", "18-120L1", "19-007D5", "19-007K3", "19-022H1", "19-022I1", "19-044G2", "19-044K3")
+
+for(i in 1:length(myfiles)){
+  CNV_calls_numbat_format(myfiles[i], samples[i])
+}
+```
+

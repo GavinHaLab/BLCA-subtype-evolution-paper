@@ -1,0 +1,56 @@
+---
+title: "Numbat_analysis"
+output: html_document
+date: "2024-09-11"
+---
+
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(pals)
+library(GenomicRanges)
+library(tidyverse)
+library(numbat)
+```
+
+```{r}
+seurat1000_noD <- readRDS("seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+mydir <- "Numbat/results/plots/"
+
+cnv_col <- c("grey", "#CC7A88", "#990F26", "#6B6ECF", "#393B79", "darkgreen")
+cnv_col <- setNames(cnv_col,nm = c("neu", "amp", "bamp", "del", "bdel", "loh"))
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+```
+
+combine all patients tumor vs normal
+```{r}
+pat_all <- c("15_109G5_IMN_ncut6", "16_079", "17_026", "17_030G1", "17_071I1", "18_120L1", "19_007" ,"19_022H1","19_022I1", "19_044")
+
+seurat_combined <- seurat1000_noD
+
+for(sample in pat_all){
+  clone_post <- read_delim(paste0("Numbat/results/R_results_v1/",sample,"/clone_post_2.tsv"), 
+    delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F) 
+  clone_post <- clone_post %>% select(cell, clone_opt, GT_opt, p_opt, compartment_opt) %>% as.data.frame() 
+  rownames(clone_post) <- clone_post$cell
+  clone_post$cell <- NULL
+  seurat_combined <- AddMetaData(seurat_combined, clone_post)}
+saveRDS(seurat_combined, "/Volumes/fh/fast/ha_g/projects/Ha_Hsieh_BladderCancer/analysis/snRNAseq/Numbat/results/plots/summary_19022separate_15109IMNncut6_USE/seurat1000_noD_withAllNumbat_ClonePost2.rds")
+write.csv(seurat_df, "/Volumes/fh/fast/ha_g/projects/Ha_Hsieh_BladderCancer/analysis/snRNAseq/Numbat/results/plots/summary_19022separate_15109IMNncut6_USE/seurat1000_noD_withAllNumbat_ClonePost2.csv", row.names = F)
+
+umap_data <- Embeddings(seurat_combined, "umap.cca")
+meta_data <- seurat_combined@meta.data
+seurat_df <- cbind(umap_data, meta_data)
+seurat_df %>%
+  ggplot(aes(x = umapcca_1, y = umapcca_2, color=sampleName)) +
+    #geom_point(data = seurat_df %>% select(-sampleName), color = "snow2", alpha = 0.5, size=0.02) +
+    geom_point(aes(color=compartment_opt),alpha = 0.8, size=0.02) +
+    scale_color_manual(values=c("skyblue", "maroon")) +
+    theme(legend.position = "none") +
+    labs(title="All Pats Results v1: Tumor vs Normal", subtitle = "15-109G5_IMN_ncut6; 19-022 separate")
+ggsave(paste0(mydir,"summary_19022separate_15109IMNncut6_USE/AllPats_v1_UMAP_TumorNormal.tiff"), width=6,height=5, dpi=600)
+```
+

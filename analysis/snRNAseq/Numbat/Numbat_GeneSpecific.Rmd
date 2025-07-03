@@ -1,0 +1,168 @@
+---
+title: "Numbat_GeneSpecific"
+output: html_document
+date: "2024-10-07"
+---
+
+```{r include=FALSE}
+library(Seurat)
+library(pals)
+library(GenomicRanges)
+library(ggpubr)
+library(rstatix)
+library(tidyverse)
+library(numbat)
+```
+
+```{r}
+seurat1000_noD <- readRDS("seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+mydir <- "Numbat/results/plots/"
+figs <- 'Figure3/raw_images/SLS/Numbat/'
+sups <- 'Supplementary_Figures/Supplementary_Figure11-15_snRNAseq/panels/'
+summary_dir <- "Numbat/results/plots/summary_19022separate_15109IMNncut6_USE/"
+
+driver_df <- read.csv('drivergene_manual_annotations2.csv')
+drivers <- driver_df$gene
+
+cnv_col <- c("grey", "#CC7A88", "#990F26", "#6B6ECF", "#393B79", "darkgreen")
+cnv_col <- setNames(cnv_col,nm = c("neu", "amp", "bamp", "del", "bdel", "loh"))
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UC_focal"="#ACD7A0","UCSD"="#43823D","UC_UCSD"="#ACD7A0", "SARC"="#D2BEA5")
+clon_col <- c("Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220", "Clonal"="#FEC216", "Subclonal"="#2B3990")
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15_109','16_070','16_097','17_026','17_030','17_071','18_101','18_120','19_007','19_044','15_108','16_079','17_020','17_047','18_016','18_065','19_001','19_004','19_022','19_037'))
+pat_col2 <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+```
+
+import dfs for gene-specific Numbat calls
+```{r}
+stacked_df <- read.csv(paste0(summary_dir, "BulkClonesFinal_Stacked_All_Driver3_v1_19022separate_15109IMNncut6.csv"))
+stacked_df_all <- read.csv(paste0(summary_dir, "BulkClonesFinal_Stacked_AllGenes_v1_19022separate_15109IMNncut6.csv"))
+
+#combine 19-022's tumors into one sample
+combined_stacked <- stacked_df%>%
+  mutate(clone_id = case_when(sample=="19_022I1"~5, .default = clone_id), 
+         clone_id = factor(clone_id, levels= rev(sort(unique(stacked_df$clone_id)))),
+         sample = case_match(sample, "19_022H1"~"19_022", "19_022I1"~"19_022", 
+                             "15_109G5_IMN_ncut6"~"15_109G5", .default = sample)) 
+
+combined_stacked_all <- stacked_df_all %>%
+  mutate(clone_id = case_when(sample=="19_022I1"~5, .default = clone_id), 
+         clone_id = factor(clone_id, levels= rev(sort(unique(stacked_df$clone_id)))),
+         sample = case_match(sample, "19_022H1"~"19_022", "19_022I1"~"19_022", 
+                             "15_109G5_IMN_ncut6"~"15_109G5", .default = sample)) 
+
+hist_df <- data.frame(sample = sort(unique(combined_stacked$sample)), 
+                      histology = c("PUC", "UC", "UCSD", "UC", "PUC", "PUC", "PUC", "UCSD", "UC"))
+
+ver <- "v1_19022separate_15109IMNncut6"
+```
+
+calculate CPs
+```{r}
+n_df <- combined_stacked %>%
+  distinct(sample, clone_id, n_cells) %>%
+  group_by(sample) %>%
+  summarise(n_cells_patient = sum(n_cells))
+
+driver_CP <- combined_stacked %>%
+  left_join(n_df) %>%
+  rowwise() %>% mutate(clone_CP = n_cells/n_cells_patient) %>% ungroup() %>%
+  filter(cnv_state_post!="neu") %>%
+  group_by(sample, symbol, cnv_state_post) %>%
+  summarise(cnv_CP = sum(clone_CP)) %>% ungroup() %>%
+  mutate(clonal = case_when(cnv_CP >0.85~"clonal", .default = "subclonal")) %>%
+  left_join(hist_df)
+  
+```
+
+
+### DRIVER GENES ###
+
+Make faceted stacked bar graph from all patients (driver genes)
+```{r}
+#combine 19-022H1/I1
+lab <- c("15_109G5"="15_109", "16_079"="16_079", "17_030G1"="17_030", "17_026"="17_026","17_071I1"="17_071", "18_120L1"="18_120", "19_007"="19_007", "19_022"="19_022", "19_044"="19_044")
+combined_stacked %>%
+  ggplot(aes(x=symbol, y=n_cells, fill=cnv_state_post, group = clone_id)) +
+        geom_bar(stat="identity", position = "stack") +
+        scale_fill_manual(values=cnv_col) +
+        scale_y_continuous(labels = NULL) +
+        facet_grid(rows=vars(sample), scales = "free_y", switch = "y", labeller = as_labeller(lab)) +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+        labs(title=paste0("Per-clone CNV calls (",ver,")"), subtitle = "using bulk_clones_final cnv_state_post\n19-022 run separate; 15-109 with IMN bulk input\n128 driver gene list (HW + IG + manual)", y="Patient", x="Gene", fill="CNV State")
+ggsave(paste0(summary_dir, "Driver3_StackedBar_All_v1_19022separate_15109IMNncut6.pdf"), width=17, height=8)
+ggsave(paste0(figs, "Driver3_StackedBar_All_v1_19022separate_15109IMNncut6.pdf"), width=17, height=8)
+```
+
+summarize clonal vs subclonal in driver genes for each patient
+-from driver_CP
+```{r}
+#use CPs of all subclones, even in same gene
+driver_CP_summary <- driver_CP %>%
+  group_by(sample) %>%
+  summarise(avg_CP = mean(cnv_CP), 
+            med_CP = median(cnv_CP), 
+            histology = unique(histology)) %>%
+  mutate(patient = substr(sample, 1, 6), 
+         histology = factor(histology, levels=c("UC", "UCSD", "PUC"))) 
+write.csv(driver_CP_summary, 'CN_Numbat_meanCP_perPatient.csv', row.names = F)
+
+stat.test <- driver_CP_summary %>%
+  wilcox_test(avg_CP~histology) %>%
+  add_xy_position()
+driver_CP_summary%>%
+  ggplot(aes(x=histology, y=avg_CP)) +
+    geom_boxplot(aes(fill=histology), outlier.shape = NA, show.legend = F) +
+    geom_jitter(width=0.2, height = 0, size=3, aes(color=patient)) +
+    scale_fill_manual(values=hist_col) +
+    scale_color_manual(values=pat_col) +
+    stat_pvalue_manual(stat.test, label="p", tip.length = 0.01) +
+    labs(x="", y="Average CP", title = "CNV clonality in driver genes", caption = "showing wilcox unadj p-val; t-test p=0.062 for UC-PUC", subtitle=paste0(ver, "; 128 driver genes"))
+ggsave(paste0(summary_dir, "Driver3_Boxplot_AvgCP_",ver,".pdf"), width=4, height=4)
+ggsave(paste0(figs, "Driver3_Boxplot_AvgCP_",ver,".pdf"), width=4, height=4)
+```
+
+graph of driver genes by CP
+```{r}
+n_df <- driver_CP %>%
+  group_by(symbol, sample) %>%
+  slice_head() %>%
+  group_by(symbol) %>%
+  summarise(n_cnv = n()) %>% arrange(desc(n_cnv))
+
+o <- driver_CP %>%
+  group_by(symbol) %>%
+  mutate(n_cnv = n()) %>%
+  summarise(avg_CP = mean(cnv_CP), 
+            n_cnv = unique(n_cnv)) %>%
+  arrange(desc(avg_CP), desc(n_cnv)) %>%
+  pull(symbol)
+
+plot_CP <- driver_CP %>%
+  left_join(n_df) %>%
+  group_by(symbol) %>%
+  summarise(avg_CP = mean(cnv_CP), 
+            n_cnv = unique(n_cnv)) %>%
+  arrange(desc(avg_CP), desc(n_cnv)) %>%
+  mutate(symbol = factor(symbol, levels=o), 
+         cnv = avg_CP * n_cnv, 
+         neutral = n_cnv - cnv) %>%
+  pivot_longer(cols=cnv:neutral, names_to = "prop_type", values_to = "prop")
+write.csv(plot_CP, 'S4D_driverCP.csv', row.names = F)
+
+plot_CP %>%
+  ggplot(aes(x=symbol, y = prop, fill=prop_type)) +
+    geom_bar(position = "stack", stat="identity", show.legend = F) +
+    scale_fill_manual(values = c("forestgreen", "snow2")) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    labs(x="gene", y="Patients with CNV * Avg CP")
+ggsave(paste0(summary_dir, "Driver3_CP_bar_",ver,".pdf"), width=12, height=5)
+```
+
