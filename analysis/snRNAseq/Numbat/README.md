@@ -1,13 +1,36 @@
-Steps to run Numbat:
-user guide: https://kharchenkolab.github.io/numbat/
-1- numbat_pileup_example.sh: example of running the first pileup and phase step of Numbat
-2- Numbat_Step2.R: run Numbat CNA calling from pileup output
+# Numbat Pipeline
 
-Numbat analysis scripts:
- -Numbat_analysis.Rmd: graphing tumor vs normal clones
- -Numbat_GeneSpecific_makeDFs.Rmd: make dataframes of clonality status for individual genes
- -Numbat_GeneSpecific.Rmd: use above dataframes and graph/analyze clonality
+##  User Guide  
+[https://kharchenkolab.github.io/numbat/](https://kharchenkolab.github.io/numbat/)
 
-Preparing TITAN bulk CNA calls for Numbat input:
-1- Numbat_TITAN_CNV_to_Numbat_input.Rmd: put TITAN segs.txt output file in the Numbat input format
-2- Numbat_combine_segs.Rmd: for making a "union" CNA profile from multiple tumors, after converting to the Numbat input format above
+---
+
+##  Steps to Run Numbat
+
+### 1. Pileup and Phasing  
+**`numbat_pileup_example.sh`**  
+Example script for running the first step: pileup and phasing.
+
+### 2. CNA Calling  
+**`Numbat_Step2.R`**  
+Run Numbat CNA calling using the output from the pileup step.
+
+---
+
+##  Numbat Analysis Scripts
+
+- **`Numbat_analysis.Rmd`** – Graph tumor vs. normal clones  
+- **`Numbat_GeneSpecific_makeDFs.Rmd`** – Create dataframes of gene-level clonality status  
+- **`Numbat_GeneSpecific.Rmd`** – Visualize and analyze gene-specific clonality using the above dataframes
+
+---
+
+##  Preparing TITAN Bulk CNA Calls for Numbat Input
+
+### 1. Convert TITAN Output  
+**`Numbat_TITAN_CNV_to_Numbat_input.Rmd`**  
+Convert TITAN `segs.txt` file to Numbat input format.
+
+### 2. Combine CNA Profiles  
+**`Numbat_combine_segs.Rmd`**  
+Create a "union" CNA profile from multiple tumors after conversion.
