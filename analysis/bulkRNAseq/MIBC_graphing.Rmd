@@ -1,0 +1,152 @@
+---
+title: "bulk_MIBC"
+output: html_document
+date: "2025-04-01"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(pals)
+library(ggpubr)
+library(tidyverse)
+```
+
+import RNAseq
+```{r}
+#annotation 
+sample_info <- read.csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv') %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC",.default = hist_sample))
+
+#MIBC from Sonali
+bulk_MIBC <- read.table("Ming_subtype_91_samples_combat_corrected_data.txt", header = T) %>%
+  left_join(sample_info %>% select(patient, tumor_site, tissue_type,hist_patient, hist_sample, rnaseq_sampleName, rnaseq_bad), by=c("ID"="rnaseq_sampleName")) %>%
+  mutate(consensusClass_filtered = ifelse(separationLevel>0.2, consensusClass, "NA")) %>%
+  filter(rnaseq_bad=="good") %>%
+  rename(sample=ID)
+
+#MIBC from Sonali
+bulk_MIBC_FFPE <- read.table("Ming_subtype_91_samples_combat_corrected_data.txt", header = T) %>%
+  left_join(sample_info %>% select(patient, tumor_site, tissue_type,hist_patient, hist_sample, rnaseq_sampleName, rnaseq_bad), by=c("ID"="rnaseq_sampleName")) %>%
+  mutate(consensusClass_filtered = ifelse(separationLevel>0.2, consensusClass, "NA")) %>%
+  filter(!is.na(rnaseq_bad), ID !="18-016G2_Rectal") %>%
+  mutate(FFPE = case_match(rnaseq_bad, "bad"~"FFPE", "good"~"FF")) %>%
+  rename(sample=ID)
+#write.csv(bulk_MIBC_FFPE %>% select(sample, patient:hist_sample, FFPE, consensusClass_filtered, cor_pval, separationLevel), 'Supplementary_Tables/rnaseq/consensusMIBC.csv', row.names = F)
+```
+
+plotting set up 
+```{r}
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD"="#43823D", "UC_UCSD"="#43823D", "UC-sarcomatoid" = "#D2BEA5", "SARC" = "#D2BEA5")
+mol_col <- c("Ba/Sq"="#e6194b","Ba_Sq"="#e6194b", "LumU"="#4363d8", "LumP"="#ffe119", "Stroma-rich"="#f58231", "LumNS"="#3cb44b", "NE"="#911eb4", "NE-like"="#911eb4")
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15_109','16_070','16_097','17_026','17_030','17_071','18_101','18_120','19_007','19_044','15_108','16_079','17_020','17_047','18_016','18_065','19_001','19_004','19_022','19_037'))
+pat_col2 <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+site_col <- c("Liver"="#B668A9", "Lung"="#63596D", "Primary"="#750F2C", "Other"="#C2D7EF", "LN"="#F8ADA7", "Lymph"="#F8ADA7")
+
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+small_legend <- theme(
+  legend.text = element_text(size = 8),      
+  legend.title = element_text(size = 10),   
+  legend.key.size = unit(0.5, "cm")            
+)
+
+wd <- 'RNAseq/'
+figs <- 'Figure5/images/bulkRNA/'
+
+order_pat <- c("15-108", "16-079", "17-020", "18-065", "19-001", "19-044", 
+               "15-109", "17-071", "18-016", "18-120", "19-007", 
+               "16-070", "16-097", "17-026", "17-030", "18-101", "19-022",
+               "19-004", "17-047", "19-037")
+```
+
+
+
+### GRPAH WITH FFPE ###
+
+stacked bar graph- MIBC by hist
+```{r}
+#df for 4A
+df <- bulk_MIBC_FFPE %>%
+  select(hist_sample, consensusClass_filtered) %>%
+  table() %>% as.data.frame() %>%
+  pivot_wider(names_from = consensusClass_filtered, values_from = Freq) %>%
+  rename("Indeterminate"="NA") %>%
+  select(hist_sample, "Ba/Sq", LumNS, LumP, LumU,"NE-like", "Stroma-rich", Indeterminate) %>%
+  rowwise() %>% mutate(Total = sum(across(-hist_sample))) %>% ungroup()
+write.csv(df, 'Figure5/source_data/5A_MIBC_bySampleHist_withFFPE.csv', row.names = F)
+
+#sample histology
+bulk_MIBC_FFPE %>%
+  select(hist_sample, consensusClass_filtered) %>%
+  table() %>% as.data.frame() %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA"))) %>%
+  ggplot(aes(x=hist_sample, y=Freq, fill=consensusClass_filtered)) +
+    geom_bar(stat="identity", position = "fill") +
+    scale_fill_manual(values=mol_col, na.value = "snow3") +
+    labs(x="Histology (sample)", y="Proportion", fill="MIBC (filtered)", title = "ConsensusMIBC from bulk RNAseq", caption = "separationLevel>0.2")
+ggsave(paste0(wd,"consensusMIBC_bulkRNAseq_stackedbar_withFFPE.pdf"), width=5, height=4)
+ggsave(paste0(figs,"consensusMIBC_bulkRNAseq_stackedbar_withFFPE.pdf"), width=5, height=4)
+
+```
+
+histology vs MIBC for each tumor (patient stacked no outline)
+```{r}
+#df
+no_met <- sort(setdiff(unique(bulk_MIBC_FFPE$patient),bulk_MIBC %>% filter(tissue_type=="Met", rnaseq_bad=="good") %>% pull(patient)))
+met_df <- bulk_MIBC_FFPE %>%
+  filter(tissue_type=="Met") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA")),
+         patient = factor(patient, levels=order_pat)) %>%
+  select(sample, patient, consensusClass_filtered, hist_patient, hist_sample) %>%
+  rbind(data.frame(patient = no_met, consensusClass_filtered = "no_met", sample=NA) %>% left_join(sample_info %>% filter(tissue_type=="Met") %>% select(patient, hist_patient, hist_sample))) %>%
+  mutate(tissue_type ="Met")
+
+no_primary <- sort(setdiff(unique(bulk_MIBC_FFPE$patient),bulk_MIBC_FFPE %>% filter(tissue_type=="Primary") %>% pull(patient)))
+pri_df <- bulk_MIBC_FFPE %>%
+  filter(tissue_type=="Primary") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "PUC", "UCSD", "SARC", "NE")), 
+         consensusClass_filtered=factor(consensusClass_filtered, levels=c("Ba/Sq", "LumNS", "LumP", "LumU", "NE-like", "Stroma-rich", "NA")),
+         patient = factor(patient, levels=order_pat)) %>%
+  select(sample, patient, consensusClass_filtered, hist_patient, hist_sample) %>%
+  rbind(data.frame(patient = no_primary, consensusClass_filtered = "no_primary", sample=NA) %>% left_join(sample_info %>% filter(tissue_type=="Primary") %>% select(patient, hist_patient, hist_sample))) %>%
+  mutate(tissue_type ="Primary")
+
+all_df <- rbind(pri_df, met_df)
+#write.csv(all_df, 'Figure5/source_data/5B_MIBC_eachTumor_PriMet.csv', row.names = F)
+
+
+#graph met
+met_df %>%
+  ggplot(aes(x=patient,fill=consensusClass_filtered,y=1)) +
+    geom_bar(linewidth=0.5, stat="identity", color="white", stroke=0.5) +
+    scale_fill_manual(values=c(mol_col, hist_col, "no_met"="white"), na.value = "snow3") +
+    scale_color_manual(values=hist_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    geom_tile(aes(fill=hist_patient, x=patient, y=5.2), width=0.8, height=0.2) +
+    labs(x="", y="Metastasis count")
+ggsave(paste0(wd,"consensusMIBC_bulkRNAseq_stackedbar_Mets_noOutline_withFFPE.pdf"), width=5, height=4)
+ggsave(paste0(figs,"consensusMIBC_bulkRNAseq_stackedbar_Mets_noOutline_withFFPE.pdf"), width=5, height=3)
+
+#graph primary
+pri_df %>%
+  ggplot(aes(x=patient,fill=consensusClass_filtered, y=1)) +
+    geom_bar(linewidth=0.5, stat="identity", color="white", stroke=0.5) +
+    scale_fill_manual(values=c(mol_col, hist_col, "no_primary"="white"), na.value = "snow3") +
+    scale_color_manual(values=hist_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(breaks=c(0,1)) +
+    #geom_tile(aes(fill=hist_patient, x=patient, y=5.2), width=0.8, height=0.2) +
+    labs(x="", y="Primary")
+ggsave(paste0(wd,"consensusMIBC_bulkRNAseq_stackedbar_Pri_noOutline_withFFPE.pdf"), width=5, height=1)
+ggsave(paste0(figs,"consensusMIBC_bulkRNAseq_stackedbar_Pri_noOutline_withFFPE.pdf"), width=5, height=1)
+
+```

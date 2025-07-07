@@ -1,0 +1,234 @@
+---
+title: "Cibersort"
+output: html_document
+date: "2024-10-01"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(SingleR)
+library(pals)
+library(rstatix)
+library(ggpubr)
+library(tidyverse)
+
+set.seed(42)
+```
+
+import seurat1000_noD
+```{r}
+seurat1000_noD <- readRDS("scRNAseq/seurat1000/seurat1000_noD_pK0.01-0.005_dim30_annotated_Aug15.rds")
+seurat_immune <- readRDS("scRNAseq/seurat1000/seurat1000_noD_immune/seurat1000_noD_immune_dim28res15.rds")
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD_focal"="#ACD7A0", "UCSD"="#43823D", "UC-sarcomatoid"= "#E7CB94")
+
+immune_ann <- seurat1000_noD@meta.data %>% select(cell_type) %>%
+  mutate(Immune = ifelse(cell_type %in% c("T_cells", "Macrophage", "Monocyte", "B_cell"), "Immune", "Not_Immune"))
+seurat1000_noD <- AddMetaData(seurat1000_noD, immune_ann %>% select(Immune))
+```
+
+import patient info
+```{r}
+sample_info <- read.csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv') %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC", .default = hist_sample)) 
+```
+
+CIBERSORT setup plotting
+```{r}
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+ciber_col <- c("B_cell"='#e6194b',"Plasma_B_cell"='#fabed4', "T_cell"='#3cb44b', "Eosinophils"='#dcbeff', "Macrophage"='#42d4f4', "Mast_cell"='#9a6324', "Monocyte"='#000075', "Neutrophils"='#911eb4', "NK_cell"='#ffe119', "Dendritic_cell"='#4363d8')
+met_col <- c("orange", "skyblue", "brown4", "tan", "forestgreen", "snow3", "hotpink3", "mediumpurple", "cyan3")
+
+
+ciber_detailed <- c('B cells naive' = '#990F26','B cells memory' = '#CC7A88','Plasma cells' = '#E6B8BF',
+                    'T cells CD8' = '#000075','T cells CD4 naive' = '#3E9FB3','T cells CD4 memory resting' = '#7ABECC','T cells CD4 memory activated' = '#B8DEE6','T cells follicular helper' = '#42d4f4','T cells regulatory (Tregs)' = '#469990','T cells gamma delta' = '#0F8299',
+                    'NK cells resting' = '#ffe119','NK cells activated' = '#fffac8',
+                    'Monocytes' = '#911eb4',
+                    'Macrophages M0' = '#653EB3','Macrophages M1' = '#967ACC','Macrophages M2' = '#C7B8E6',
+                    'Dendritic cells resting' = '#54990F','Dendritic cells activated' = '#CFE6B8',
+                    'Mast cells resting' = '#f032e6','Mast cells activated' = '#fabed4',
+                    'Eosinophils' = '#333333',
+                    'Neutrophils' = '#CCCCCC')
+
+det_lev <- c('B cells naive','B cells memory','Plasma cells','T cells CD8','T cells CD4 naive','T cells CD4 memory resting','T cells CD4 memory activated','T cells follicular helper','T cells regulatory (Tregs)','T cells gamma delta','NK cells resting','NK cells activated','Monocytes','Macrophages M0','Macrophages M1','Macrophages M2','Dendritic cells resting','Dendritic cells activated','Mast cells resting','Mast cells activated','Eosinophils','Neutrophils')
+```
+
+cell types basic vs detailed
+```{r}
+#keep Plasma B cell separate in basic
+basic_to_detailed <-data.frame(celltype_detailed = c('B cells naive','B cells memory','Plasma cells','T cells CD8','T cells CD4 naive','T cells CD4 memory resting','T cells CD4 memory activated','T cells follicular helper','T cells regulatory (Tregs)','T cells gamma delta','NK cells resting','NK cells activated','Monocytes','Macrophages M0','Macrophages M1','Macrophages M2','Dendritic cells resting','Dendritic cells activated','Mast cells resting','Mast cells activated','Eosinophils','Neutrophils'), 
+                 celltype_basic = c("B_cell", "B_cell", "Plasma_B_cell", rep("T_cell",7), rep("NK_cell",2), "Monocyte", rep("Macrophage",3), rep("Dendritic_cell",2), rep("Mast_cell",2), "Eosinophils", "Neutrophils"))
+#plasma B cell = B cell in basic
+basic_to_detailed2 <-data.frame(celltype_detailed = c('B cells naive','B cells memory','Plasma cells','T cells CD8','T cells CD4 naive','T cells CD4 memory resting','T cells CD4 memory activated','T cells follicular helper','T cells regulatory (Tregs)','T cells gamma delta','NK cells resting','NK cells activated','Monocytes','Macrophages M0','Macrophages M1','Macrophages M2','Dendritic cells resting','Dendritic cells activated','Mast cells resting','Mast cells activated','Eosinophils','Neutrophils'), 
+                 celltype_basic = c("B_cell", "B_cell", "B_cell", rep("T_cell",7), rep("NK_cell",2), "Monocyte", rep("Macrophage",3), rep("Dendritic_cell",2), rep("Mast_cell",2), "Eosinophils", "Neutrophils"))
+```
+
+
+### IMPORT CIBERSORT RESULTS ###
+
+CIBERsort: import my results
+```{r}
+wd <- "scRNAseq/seurat1000/seurat1000_noD_immune/Cibersort"
+
+ciber1 <- read_delim(paste0(wd, "/Job1_Fx_LM22_relative/CIBERSORTx_Job1_Results.csv"), 
+    delim = ",", escape_double = FALSE, trim_ws = TRUE, show_col_types = F) %>%
+  rename("sampleName"="Mixture") %>%
+  mutate(Patient=str_sub(sampleName,1,6)) %>%
+  left_join(sample_info %>% select(hist_patient, hist_sample, rnaseq_sampleName, rnaseq_bad, tissue_type, tumor_site_group), by = c("sampleName"="rnaseq_sampleName")) %>%
+  pivot_longer(cols=2:23, names_to = "celltype_detailed", values_to = "percent") %>%
+  left_join(basic_to_detailed2) %>%
+  filter(!is.na(rnaseq_bad), sampleName !="18-016G2_Rectal") %>%
+  mutate(FFPE = case_match(rnaseq_bad, "bad"~"FFPE", "good"~"FF"))
+
+ciber3 <- read_delim(paste0(wd, "/Job3_Fx_TR4_relative/CIBERSORTx_Job3_Results.csv"), 
+    delim = ",", escape_double = FALSE, trim_ws = TRUE, show_col_types = F) %>%
+  rename("sampleName"="Mixture") %>%
+  mutate(Patient=str_sub(sampleName,1,6)) %>%
+  left_join(sample_info %>% select(hist_patient, hist_sample, rnaseq_sampleName, rnaseq_bad, tissue_type, tumor_site_group), by = c("sampleName"="rnaseq_sampleName")) %>%
+  pivot_longer(cols=2:5, names_to = "TR4", values_to = "percent") %>%
+  filter(!is.na(rnaseq_bad), sampleName !="18-016G2_Rectal") %>%
+  mutate(FFPE = case_match(rnaseq_bad, "bad"~"FFPE", "good"~"FF"))
+```
+
+### GRAPHING JOB 1 ###
+
+directories
+```{r}
+wd1 <- "scRNAseq/seurat1000/seurat1000_noD_immune/Cibersort/Job1_Fx_LM22_relative/"
+sup <- 'Supplementary_Figures/Supplementary_Figures_snRNAseq/panels/Cibersort/'
+```
+
+boxplots- myeloid
+```{r}
+#add up % in each basic cell type (no FFPE)
+ciber1_basic <- ciber1 %>%
+  group_by(sampleName, celltype_basic) %>%
+  summarise(percent = sum(percent)) %>% ungroup() %>%
+  left_join(sample_info %>% select(patient, hist_patient, hist_sample, rnaseq_sampleName, rnaseq_bad, tissue_type, tumor_site_group), by = c("sampleName"="rnaseq_sampleName"))%>%
+  filter(hist_sample %in% c("UC", "UCSD", "PUC"), rnaseq_bad=="good") %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "PUC", "UCSD")))
+#write.csv(ciber1_basic, 'Supplementary_Figures/Supplementary_Figure11-15_snRNAseq/source_data/S14B_Cibersort_Basic_MyeloidLymphoid.csv', row.names = F)
+
+#myeloid only
+stat.test <- ciber1_basic %>%
+  filter(celltype_basic %in% c("Macrophage", "Monocyte")) %>%
+  mutate(celltype_basic = factor(celltype_basic, levels=c("Macrophage", "Monocyte"))) %>%
+  group_by(celltype_basic) %>%
+  wilcox_test(percent~hist_sample, ref.group = "UCSD") %>%
+  add_xy_position(step.increase = 0.05)
+ciber1_basic %>%
+  filter(celltype_basic %in% c("Macrophage", "Monocyte")) %>%
+  mutate(celltype_basic = factor(celltype_basic, levels=c("Macrophage", "Monocyte"))) %>%
+  ggplot(aes(x=hist_sample, y=percent)) +
+    geom_boxplot(aes(fill=hist_sample), show.legend = F, outlier.shape = NA) +
+    geom_jitter(height=0, width=0.2, alpha=0.7, shape=21, size=2, stroke=NA, fill="black") +
+    facet_wrap(~celltype_basic, scales="fixed", nrow=1) +
+    border() +
+    scale_y_continuous(expand=expansion(mult=c(0.05,0.17))) +
+    stat_pvalue_manual(stat.test, label="p",hide.ns = F, tip.length = 0) +
+    scale_fill_manual(values=hist_col) +
+    labs(x="Sample Histology", y="Percent of immune cells", caption="wilcox padj shown (vs UCSD only)")
+ggsave(paste0(wd1, "basic_celltypes_Myeloid_box.pdf"), width=4, height=3)
+ggsave(paste0(sup, "basic_celltypes_Myeloid_box_nostats.pdf"), width=3, height=3)
+```
+
+boxplots- lymphoid
+```{r}
+#visualize LNs in lymphoid
+stat.test <- ciber1_basic %>%
+  filter(celltype_basic %in% c("B_cell", "T_cell")) %>%
+  mutate(celltype_basic = factor(celltype_basic, levels=c("B_cell", "T_cell")), 
+         LN = case_match(tumor_site_group, "LN"~"LN", .default = "not_LN")) %>%
+  group_by(celltype_basic) %>%
+  wilcox_test(percent~hist_sample, ref.group = "PUC") %>%
+  add_xy_position(step.increase = 0.03)
+ciber1_basic %>%
+  filter(celltype_basic %in% c("B_cell", "T_cell")) %>%
+  mutate(celltype_basic = factor(celltype_basic, levels=c("B_cell", "T_cell")), 
+         LN = case_match(tumor_site_group, "LN"~"LN", .default = "not_LN")) %>%
+  ggplot(aes(x=hist_sample, y=percent)) +
+    geom_boxplot(outlier.shape = NA, aes(fill=hist_sample), show.legend = F) +
+    geom_jitter(aes(color=LN),height=0, width=0.2, alpha=0.7, size=2, shape=16) +
+    facet_wrap(~celltype_basic, scales="fixed") +
+    border() +
+    scale_y_continuous(expand=expansion(mult=c(0.05,0.1))) +
+    scale_fill_manual(values=hist_col) +
+    scale_color_manual(values=c("LN"= "#E81566","not_LN"= "black")) +
+    stat_pvalue_manual(stat.test, tip.length = 0, hide.ns = F, label="p") +
+    labs(x="Sample Histology", y="Percent of immune cells", caption="wilcox vs PUC, p")
+ggsave(paste0(wd1, "basic_celltypes_BTcells_box.pdf"), width=4, height=3)
+ggsave(paste0(sup, "basic_celltypes_BTcells_box_nostats.pdf"), width=4, height=3)
+
+#stats only LN
+stat.test <- ciber1_basic %>%
+  filter(celltype_basic %in% c("B_cell", "T_cell")) %>%
+  mutate(celltype_basic = factor(celltype_basic, levels=c("B_cell", "T_cell")), 
+         LN = case_match(tumor_site_group, "LN"~"LN", .default = "not_LN")) %>%
+  filter(LN == "LN") %>%
+  group_by(celltype_basic) %>%
+  t_test(percent~hist_sample, ref.group = "PUC") %>%
+  add_xy_position()
+ciber1_basic %>%
+  filter(celltype_basic %in% c("B_cell", "T_cell")) %>%
+  mutate(celltype_basic = factor(celltype_basic, levels=c("B_cell", "T_cell")), 
+         LN = case_match(tumor_site_group, "LN"~"LN", .default = "not_LN")) %>%
+  filter(LN == "LN") %>%
+  ggplot(aes(x=hist_sample, y=percent)) +
+    geom_boxplot(aes(fill=hist_sample), outlier.shape = NA, show.legend = F) +
+    geom_jitter(aes(color=LN),height=0, width=0.2, alpha=0.7, size=2) +
+    facet_wrap(~celltype_basic, scales="free_y") +
+    scale_y_continuous(expand=expansion(mult=c(0.05,0.1))) +
+    scale_color_manual(values=c("red", "black")) +
+    stat_pvalue_manual(stat.test, hide.ns = F, label="p", tip.length = 0) +
+    scale_fill_manual(values=hist_col) +
+    labs(x="Sample Histology", y="Percent of immune cells")
+```
+
+
+### GRAPHING TR4 ###
+
+set up
+```{r}
+wd3 <- "scRNAseq/seurat1000/seurat1000_noD_immune/Cibersort/Job3_Fx_TR4_relative/"
+sup <- 'Supplementary_Figures/Supplementary_Figures_snRNAseq/panels/Cibersort/'
+
+#organize & filter df
+ciber3_df <- ciber3 %>%
+  filter(hist_sample %in% c("UC", "UCSD", "PUC"), rnaseq_bad=="good") %>%
+  mutate(hist_sample = factor(hist_sample, levels=c("UC", "PUC", "UCSD")),
+         TR4 = case_match(TR4,
+                          "CD10"~"Fibroblast",
+                          "CD31"~"Endothelial", 
+                          "CD45"~"Immune", 
+                          "EPCAM"~"Epithelial"), 
+         TR4=factor(TR4, levels=c("Epithelial", "Immune", "Fibroblast", "Endothelial"))) %>%
+  select(sampleName, Patient, hist_sample, hist_patient, TR4, percent, rnaseq_bad, tissue_type, tumor_site_group, FFPE)
+#write.csv(ciber3_df, 'Supplementary_Figures/Supplementary_Figure11-15_snRNAseq/source_data/S14B_Cibersort_TR4.csv', row.names = F)
+```
+
+boxplots - fibroblasts
+```{r}
+#fibroblasts- by histology
+stat.test <- ciber3_df %>% filter(TR4 == "Fibroblast") %>%
+  wilcox_test(percent~hist_sample, ref.group = "UCSD") %>%
+  add_xy_position(step.increase = 0.07) %>%
+  add_significance("p")
+ciber3_df %>% filter(TR4 == "Fibroblast") %>%
+  ggplot(aes(x=hist_sample, y=percent)) +
+    geom_boxplot(aes(fill=hist_sample), show.legend = F, outlier.shape=NA) +
+    geom_jitter(height=0, width=0.2, alpha=0.7, shape=21, size=2, stroke=NA, fill="black") +
+    facet_wrap(~TR4, nrow = 1) +
+    stat_pvalue_manual(stat.test, hide.ns = F,label="p", tip.length = 0) +
+    scale_fill_manual(values=hist_col) +
+    border() +
+    scale_color_manual(values=met_col) +
+    labs(x="", y="% of All Cells", title="CIBERSORTx Job 3", caption="wilcox test non-adj p-values") +
+    scale_y_continuous(breaks=seq(0,1,0.2), labels = seq(0,100,20),limits=c(0,.80))
+ggsave(paste0(wd3, "TR4_Fibroblast_box.pdf"), width=2.2, height=4)
+ggsave(paste0(sup, "TR4_Fibroblast_box_nostats.pdf"), width=2.2, height=4)
+```

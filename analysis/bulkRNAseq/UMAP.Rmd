@@ -1,0 +1,125 @@
+---
+title: "PCA_Cosine"
+output: html_document
+date: "2025-04-01"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(pals)
+library(ggpubr)
+library(umap)
+library(gridExtra)
+library(tidyverse)
+```
+
+import RNAseq
+```{r}
+#basic file
+vst <- read_delim("ComBatseq_VST_91samples_19712genes_2_17_2023.txt", delim="\t", show_col_types = F)
+
+#annotation 
+sample_info <- read.csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv') %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC",.default = hist_sample))
+
+#MIBC from Sonali
+bulk_MIBC <- read.table("Ming_subtype_91_samples_combat_corrected_data.txt", header = T) %>%
+  left_join(sample_info %>% select(patient, tumor_site, tissue_type,hist_patient, hist_sample, rnaseq_sampleName, rnaseq_bad), by=c("ID"="rnaseq_sampleName")) %>%
+  mutate(consensusClass_filtered = ifelse(separationLevel>0.2, consensusClass, "NA")) %>%
+  filter(!is.na(rnaseq_bad), ID !="18-016G2_Rectal") %>%
+  mutate(FFPE = case_match(rnaseq_bad, "bad"~"FFPE", "good"~"FF")) %>%
+  rename(sample=ID)
+```
+
+set up RNAseq df/matrices (include FFPE)
+```{r}
+#clean up vst file as "rnaseq_vst"
+##remove repeat/bad samples -> 82 total
+rnaseq_vst <- vst %>% pivot_longer(cols= -gene, 
+                                  names_to = "sample", 
+                                  values_to = "vst") %>%
+  mutate(patient = substr(sample, 1, 6)) %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, hist_sample, hist_patient, rnaseq_bad, tumor_site_group), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(!is.na(rnaseq_bad), sample !="18-016G2_Rectal") %>%
+  mutate(FFPE = case_match(rnaseq_bad, "bad"~"FFPE", "good"~"FF")) %>%
+  left_join(bulk_MIBC)
+
+#matrix vst
+vst_mat <- rnaseq_vst %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst) %>%
+  as.data.frame()
+rownames(vst_mat) <- vst_mat$gene
+vst_mat$gene <- NULL
+```
+
+plotting set up 
+```{r}
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD"="#43823D", "UC_UCSD"="#43823D", "UC-sarcomatoid" = "#D2BEA5", "SARC" = "#D2BEA5")
+mol_col <- c("Ba/Sq"="#e6194b","Ba_Sq"="#e6194b", "LumU"="#4363d8", "LumP"="#ffe119", "Stroma-rich"="#f58231", "LumNS"="#3cb44b", "NE"="#911eb4", "NE-like"="#911eb4")
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15_109','16_070','16_097','17_026','17_030','17_071','18_101','18_120','19_007','19_044','15_108','16_079','17_020','17_047','18_016','18_065','19_001','19_004','19_022','19_037'))
+pat_col2 <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+site_col <- c("Liver"="#B668A9", "Lung"="#63596D", "Primary"="#750F2C", "Other"="#C2D7EF", "LN"="#F8ADA7", "Lymph"="#F8ADA7")
+
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+small_legend <- theme(
+  legend.text = element_text(size = 8),      
+  legend.title = element_text(size = 10),   
+  legend.key.size = unit(0.5, "cm")            
+)
+
+wd <- 'RNAseq/'
+figs <- 'Main_Figures/Figure5/images/bulkRNA/'
+```
+
+### UMAP ###
+
+```{r}
+set.seed(11135)
+
+# Subset the top 1000 most variable genes
+top_var_genes <- names(sort(apply(vst_mat, 1, var), decreasing = TRUE)[1:1000])
+vst_topvar <- vst_mat[top_var_genes, ]
+
+umap_res <- umap(t(vst_topvar))
+umap_df <- as.data.frame(umap_res$layout[, 1:2]) %>%
+  rename(UMAP1 = V1, UMAP2=V2) %>%
+  rownames_to_column(var="sample") %>%
+  #left_join(sample_info %>% select(rnaseq_sampleName, hist_sample, hist_patient, tumor_site_group), by=c("sample"="rnaseq_sampleName")) %>%
+  left_join(rnaseq_vst %>% distinct(sample, hist_sample, hist_patient, tumor_site_group, FFPE)) %>%
+  left_join(bulk_MIBC %>% select(sample, consensusClass, consensusClass_filtered)) %>%
+  mutate(patient = str_sub(sample, 1, 6))
+#write.csv(umap_df, 'Main_Figures/Figure5/source_data/5C_bulkRNAseq_UMAP.csv', row.names = F)
+
+### GRAPH ###
+
+#sample histology
+umap_df %>%
+  ggplot(aes(x=UMAP1, y=UMAP2)) +
+    geom_point(aes(color=hist_sample, shape=FFPE), size=3) +
+    scale_shape_manual(values=c(16,3)) +
+    scale_color_manual(values=c(hist_col)) +
+    labs(title="UW TAN bulk RNAseq UMAP", subtitle = "top 1000 variable genes (vst)")
+ggsave(paste0(wd, "DimReduction/UMAP_byHistSample_withFFPE.pdf"), width=5, height=4)
+ggsave(paste0(figs, "UMAP_byHistSample_withFFPE_seed11135.pdf"), width=5, height=4)
+
+#FFPE vs FF
+umap_df %>%
+  ggplot(aes(x=UMAP1, y=UMAP2)) +
+    geom_point(aes(color=patient, shape=hist_patient, size=FFPE), stroke=2, alpha=0.9) +
+    scale_color_manual(values=pat_col2) +
+    scale_size_manual(values=c(3,6)) +
+    scale_shape_manual(values=c("UC"=16, "UCSD"=15, "PUC"=17, "NE"=1, "SARC"=0)) +
+    guides(color=guide_legend(ncol=2)) +
+    labs(title="UW TAN bulk RNAseq UMAP", subtitle = "top 1000 variable genes (vst)")
+ggsave(paste0(figs, "UMAP_byPatient_withFFPE_seed11135.pdf"), width=5.75, height=4)
+
+```
