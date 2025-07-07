@@ -1,0 +1,338 @@
+---
+title: "CollectAllelicCounts"
+output: html_document
+date: "2024-10-29"
+---
+
+libraries
+```{r include=FALSE}
+library(data.table)
+library(readxl)
+library(rstatix)
+library(ggpubr)
+library(tidyverse)
+```
+
+import tissue SNVs
+-these do not exclude FFPE primary unique mutations, so that is done below by filtering by pyclone input bed files
+-does not include indels (which is fine)
+```{r message=FALSE, warning=FALSE}
+##original code to get mutations
+myfl <- list.files("withcfdna_twoFilters")
+mydir <- "withcfdna_twoFilters/"
+
+tissue <- as.tibble(data.frame())
+i=1
+for (fl in myfl){
+  pat <- sub(".*?(\\d{2}-\\d{3}).*", "\\1", fl)
+  samp <- sub(".txt","",fl)
+  mydf <- read_delim(paste0(mydir,fl), delim = "\t", escape_double = FALSE, trim_ws = TRUE) %>%
+    select(Chr,Start, End, Ref, Alt, Func.refGene, Gene.refGene, Total_reads_in_normal, Ref_reads_in_normal, Alt_reads_in_normal, Normal_VAF, Total_reads_in_Tumor, Ref_reads_in_Tumor, Alt_reads_in_Tumor, Tumor_VAF) %>%
+    mutate(patient = pat, sample=samp)
+  tissue <- bind_rows(tissue, mydf)
+  print(i)
+  i=i+1
+}
+
+cfDNA_WGS <- filter(tissue, grepl("wgs_cf", sample))
+
+#write.csv(tissue, "WGS_tissue-cfDNA_SNVs_All.csv")
+#write.csv(cfDNA_WGS, "WGS_cfDNA_SNVs_All.csv")
+```
+
+input tumor SNV df
+```{r}
+tumor <- read.csv("WGS_tissue_SNVs.csv") %>%
+  filter(!sample %in% c("18-101M3", "17-047pD10", "18-120pA14", "19-044pB11", "19-004J1-007J1")) #remove low purity samples & weird 19-004-007 mixed
+patient <- unique(tumor$patient)
+
+tumor_filtered <- read.csv("WGS_tissue_SNVs_BEDfiltered.csv") %>% #from below chunk%>%
+  filter(!sample %in% c("18-101M3", "17-047pD10", "18-120pA14", "19-044pB11", "19-004J1-007J1")) #remove low purity samples & weird 19-004-007 mixed
+
+```
+
+
+use Pyclone input bed files to filter out FFPE primary unique mutations from above "tissue"
+```{r}
+myfl <- list.files("combinedPatient/nocfdna")
+myfl <- grep(".readCounts", myfl, value = T)
+mydir <- "combinedPatient/nocfdna/"
+
+df1 <- data.frame(short = substr(myfl, 1,4),
+           full = c("19-001","19-004","19-007","18-016","17-020",  "19-022" ,"17-026","17-030","19-037","19-044", "17-047","18-065","16-070" ,"17-071" ,"16-079", "16-097", "18-101" ,"15-108", "15-109" ,"18-120" ))
+
+tumor_filtered <- data.frame()
+for(i in 1:nrow(df1)){
+  pat <- df1$full[i]
+  fl <- grep(df1$short[i], myfl, value=T)
+
+  filtered_muts <- read_delim(paste0(mydir, fl), delim="\t", show_col_types = F) %>%
+    mutate(id = paste0(Chr, "_", Start, "_", Ref, "_", Alt))
+  tumor_pat <- filter(tumor, patient ==pat)
+
+  #check
+  print(pat)
+  print(paste0(length(setdiff(unique(filtered_muts$id), unique(tumor_pat$id))), " muts in filtered bed not in tumor")) #should be 0
+  print(tumor_pat %>% filter(!id %in% unique(filtered_muts$id)) %>% pull(sample) %>% table()) #should only be FFPE primary
+
+  #filter
+  tumor_pat <- tumor_pat %>% filter(id %in% unique(filtered_muts$id))
+  tumor_filtered <- rbind(tumor_filtered, tumor_pat)
+}
+
+# write.csv(tumor_filtered, "WGS_tissue_SNVs_BEDfiltered.csv", row.names = F)
+```
+
+***SETTING UP TO RUN COLLECTALLELICCOUNTS***
+
+Per patient BED file of tumor SNVs (updated with FFPE unique filtering, removing 5 bad samples)
+```{r}
+#Write a BED file with union of all the SNVs in a patient
+##input: patient = vector of all patients, tumor = data frame including all tumor SNVs from all patients (has columns varID, Chr, Start, End)
+for(i in 1:length(patient)) #for each patient in dataset
+{
+  snv_bed=tumor_filtered[tumor_filtered$patient==patient[i],] #subset tumor df to only SNVs in current patient
+  snv_bed=snv_bed[!duplicated(snv_bed$varID),] #remove duplicated SNVs by varID
+  snv_bed=snv_bed[,c('Chr', 'Start', 'End')] #subset to only Chr, Start, End columns
+  snv_bed <- snv_bed %>% mutate(Start = as.numeric(format(Start, scientific=F)), End = as.numeric(format(End, scientific=F)))
+  snv_bed$Start=snv_bed$Start-1 #adjust "start position to be 0-based
+  write.table(snv_bed,file=paste0('PowerCalc/tumorBEDs_new/', patient[i], "_tumorSNV.bed") ,row.names=FALSE, col.names=FALSE, quote=FALSE, sep="\t") #write bed file for each patient including all tumor mutations in that patient
+}
+```
+
+Set up sh file to run CollectAllelicCounts
+```{r}
+#inputs
+inputs <- read_csv("PowerCalc/CAC_sh_inputs_v2.csv")
+hg38_ref <- "Homo_sapiens_assembly38.fasta"
+
+#Write a .sh file quering gatk CollectAllelicCounts for all the patient SNV in the ctDNA file
+file_conn <- file('gatk_v2.sh', open = "w")
+
+for(i in 1:nrow(inputs)){
+  a=paste0('gatk CollectAllelicCounts -I ',inputs[i,4], ' -R ',hg38_ref,' -L ', inputs[i,5], ' -O ',inputs[i,6])
+  # Write the strings to separate lines in the .sh file
+  writeLines(a, file_conn)
+}
+# Close the file connection
+close(file_conn)
+
+#Run this file using sh Filename.sh on the terminal (ml GATK, output dir needs to be in place before running)
+```
+
+***READ COLLECTALLELICCOUNTS OUTPUT***
+
+set up function to read output of CollectAllelicCounts
+```{r}
+# Function to read output file of CollectAllelicCounts and ignore rows starting with '@', then read the rest into a data frame
+readFileIgnoreAtRows <- function(filePath) {
+  # Step 1: Read the entire file into a character vector
+  fileContent <- readLines(filePath)
+  
+  # Initialize an empty vector to hold the non-@ lines
+  nonAtLines <- c()
+  
+  # Step 2: Filter out lines starting with '@'
+  for(line in fileContent) {
+    if (!grepl("^@", line)) { # Using grepl to check if the line does NOT start with '@'
+      nonAtLines <- c(nonAtLines, line)
+    }
+  }
+  # Convert the list of lines into a single string, ensuring tabs are preserved
+  dataString <- paste(nonAtLines, collapse = "\n")
+  
+  # Step 3: Convert the string into a data frame, handling tab separation
+  # Splitting the string into lines based on newline characters
+  dataLines <- strsplit(dataString, "\n")[[1]]
+  
+  # Converting the list of trimmed lines into a matrix, using tab as separator
+  dataMatrix <- do.call(rbind, lapply(dataLines, function(line) strsplit(line, "\\t")[[1]]))
+  
+  # Converting the matrix to a data frame
+  dataFrame <- as.data.frame(dataMatrix, stringsAsFactors = FALSE)
+  colnames(dataFrame)=dataFrame[1,]
+  dataFrame=dataFrame[-1,]
+  return(dataFrame)
+}
+```
+
+get tissue tumor purity & cfDNA TFx
+```{r include=FALSE}
+#sample df
+inputs <- read_csv("PowerCalc/CAC_sh_inputs.csv") %>%
+  select(patient, seqType, ID)
+
+#Oct 2024 updated TITAN TFx with Top Off for WGS cfDNA
+DEEP_TFx <- read_delim("BC-TAN_TFX_Subtype_cfDNA.tsv", delim = "\t", show_col_types = F) %>%
+  mutate(patient = substr(sample, 8,13)) %>%
+  left_join(inputs %>% filter(seqType=="cfWGS")) %>%
+  rename(sample_id=ID, type=seqType, cfDNA_TFx = TITAN_tfx_topOffs, preTopOff_TFx=tfx, patient_id=patient) %>% 
+  mutate(cfSample = paste0(sample_id, "_", type))
+#ichor TFx for targeted cfDNA (not updated, but correct- didn't need to rerun ULP w/ July updates)
+ULP_TFx <- read_csv("sample_details_tumorfractions_clinical.csv")[,1:6] %>%
+  filter(grepl("ULP", type)) %>%
+  rename(cfDNA_TFx = ichor_tfx) %>%
+  mutate(cfSample = paste0(sample_id, "_", type))
+
+#combine TFx:
+##using ichor ULP TFx for all TP, TITAN TFx for all WGS
+#TFx_cfDNA2 <- rbind(DEEP_TFx %>% select(cfSample, sample_id, patient_id, type, cfDNA_TFx), ULP_TFx %>% select(cfSample, sample_id, patient_id, type, cfDNA_TFx))
+##using TITAN TFx for all if patient had WGS, or ichor TFx for patients without deep WGS
+TFx_cfDNA <- data.frame()
+samps <- unique(c(DEEP_TFx$cfSample[1:8], ULP_TFx$cfSample))
+for(samp in samps){
+  pat <- substr(samp, 1, 6)
+  has_WGS <- nrow(DEEP_TFx %>% filter(patient_id==pat))>0
+  if(has_WGS){TFx = DEEP_TFx %>% filter(patient_id==pat) %>% pull(cfDNA_TFx)} else {TFx = ULP_TFx %>% filter(cfSample==samp) %>% pull(cfDNA_TFx)}
+  sample_id <- substr(samp, 1, 11)
+  type <- ifelse(grepl("cfWGS", samp), "cfWGS", "ULP-WGS")
+  
+  temp <- data.frame(patient_id = pat, cfSample = samp, sample_id = sample_id, cfDNA_TFx = TFx, type = type)
+  TFx_cfDNA <- bind_rows(TFx_cfDNA, temp)
+}
+
+#December 2024 updated TITAN TFx for tissue - (changed several patients' solutions based on discussion with Gavin early Dec)
+tumor_purity <- data.frame()
+myfl <- list.files(path = "optimalClusterSolutionCurated/",
+           pattern = ".*params.txt")
+for(fl in myfl){
+  samp <- sub("_cluster\\d.params.txt", "", fl)
+  normal <- read_delim(file=paste0("optimalClusterSolutionCurated/",fl), delim = "\t", col_names = F, show_col_types = F)[1,]$X2
+  ploidy <- read_delim(file=paste0("optimalClusterSolutionCurated/",fl), delim = "\t", col_names = F, show_col_types = F)[2,]$X2
+  temp <- data.frame(sample_id = samp, tumor_purity = 1-as.numeric(normal), ploidy= ploidy)
+  tumor_purity <- rbind(tumor_purity, temp)
+}
+
+myfl <- list.files(path = "optimalClusterSolutionCurated/",
+           pattern = ".*params.txt")
+for(fl in myfl){
+  samp <- sub("_cluster\\d.params.txt", "", fl)
+  normal <- read_delim(file=paste0("optimalClusterSolutionCurated/",fl), delim = "\t", col_names = F, show_col_types = F)[1,]$X2
+  ploidy <- read_delim(file=paste0("optimalClusterSolutionCurated/",fl), delim = "\t", col_names = F, show_col_types = F)[2,]$X2
+  temp <- data.frame(sample_id = samp, tumor_purity = 1-as.numeric(normal), ploidy= ploidy)
+  tumor_purity <- rbind(tumor_purity, temp)
+}
+#write.csv(tumor_purity, "WGS_purity_ploidy_curated_Dec2024.csv")
+#have to get names in tumor (SNVs) & purity to match
+name_match <- data.frame(tumor_name = setdiff(unique(tumor$sample), unique(tumor_purity$sample_id)),
+                         tumor_purity_name = c("TAN1-SH-14-526-B5-FFPE","TAN2-SH-15-2540-B4-B10-FFPE","TAN3-16-070-N1-FFPE","TAN4-16-079-P1-P2-FFPE","TAN5SH-15-06932-A7-A10-FFPE",
+                                               "TAN-17-020-G3-FROZEN","TAN-17-020-H4-FROZEN","TAN-17-020-K1-FROZEN","TAN-17-020-N1-FROZEN","TAN-17-020-P2-FROZEN",
+                                               "TAN-17-026-H2-FROZEN","TAN-17-026-I1-FROZEN","TAN-17-026-J3-FROZEN","TAN-17-026-K2-FROZEN","TAN-17-026-M1-FROZEN","19-004J1-007"))
+tumor_purity <- tumor_purity %>%
+  left_join(name_match, by=c("sample_id"="tumor_purity_name")) %>%
+  mutate(tumor_name = case_when(is.na(tumor_name)~sample_id, .default = tumor_name))
+```
+
+do power calc (original, per tumor)
+```{r}
+#loop over all
+mydir <- "cell_free_dna/OverlapPowerCalc/NEWTopOff/output/"
+myfl <- list.files(mydir)
+#fl <- myfl[3]
+
+allpower <- data.frame()
+for(fl in myfl){
+  pat <- substr(fl,1,6)
+  #cfDNA read counts in each cfDNA sample for all tumor mutations in that patient
+  GAC <- readFileIgnoreAtRows(paste0(mydir,fl)) %>% 
+    mutate(across(2:4, as.numeric)) %>%
+    `colnames<-`(c("Chr", "Start", "Ref_reads_ctDNA", "Alt_reads_ctDNA", "Ref", "Alt")) %>%
+    mutate("Total_reads_ctDNA" = Ref_reads_ctDNA + Alt_reads_ctDNA, 
+          varID = paste(Chr, Start, Ref, sep = "_"), 
+          cfSample = substr(fl, 1,11))
+  
+  #add cfDNA TFx to above df, using titan or ichor depending on cfDNA sample type
+  TFx <- TFx_cfDNA %>% filter(patient_id == pat)
+  if(substr(fl, 13,16)=="cfTP"){
+    GAC <- GAC %>% left_join(TFx %>% filter(grepl("ULP-WGS", cfSample)), by=c("cfSample"= "sample_id"))
+  } else{GAC <- GAC %>% left_join(TFx %>% filter(grepl("_cfWGS", cfSample)), by=c("cfSample"= "sample_id"))}
+  GAC <- GAC %>% mutate(cfSample = cfSample.y) %>% select(-cfSample.y)
+  
+  #filter df of all tumor mutations to the patient we're looking at, and add on tumor purity for each tumor sample
+  tumor_sub <- tumor_filtered %>% filter(patient == pat) %>% left_join(tumor_purity %>% select(tumor_name, tumor_purity), by=c("sample"="tumor_name"))
+  
+  #left join the cfDNA read counts to the tumor mutations by varID
+  df1 <- tumor_sub %>% select(varID, id, Func.refGene, Gene.refGene, sample, patient, Total_reads_in_Tumor, Tumor_VAF, tumor_purity) %>%
+    left_join(GAC %>% select(varID, Ref_reads_ctDNA, Alt_reads_ctDNA, Total_reads_ctDNA,cfSample, cfDNA_TFx, type))
+  #calculate power per tumor mutation using purity corrected tumor VAF and dbinom of cfDNA read depth
+  df1 <- df1 %>% 
+    mutate(p=Tumor_VAF*cfDNA_TFx/tumor_purity) %>%
+    mutate(p_alt = ifelse(p>1, 1, p)) %>%
+    mutate(power = 1- (dbinom(0,Total_reads_ctDNA, p_alt)+dbinom(1,Total_reads_ctDNA, p_alt)+dbinom(2,Total_reads_ctDNA, p_alt)))
+    # mutate(power = ifelse(tumor_purity==0, NA, power), #set everything to NA if tumor purity == 0 (after running calcs so that calc doesn't just fail)
+    #        p = ifelse(tumor_purity==0, NA, p))
+  allpower <- bind_rows(allpower, df1)
+}
+
+allpower <- allpower %>%
+  mutate(CAC3 = case_when(Alt_reads_ctDNA>=3~"CAC_called_3", .default = "CAC_under_3"))
+
+#cfDNAPower_TITANTFx_BEDfiltered_TumorMuts.csv: using only 1 TFx per patient, prioritizing TITAN
+#write.csv(allpower, "cfDNAPower_TITANTFx_BEDfiltered_TumorMuts.csv", row.names=F)
+```
+
+
+
+annotate mutation clonality
+```{r}
+#grab per mutation cluster & clonality annotation (csv created in Metastatic_seeding/cluster_CPs.Rmd)
+mut_clonality <- read.csv('all_mut_CP.csv') %>%
+  mutate(sample_id= case_match(sample_id, "16-079_Primary-FFPE"~"16-079_Primary-FF", .default = sample_id))
+
+#add tumor cluster annotation to cfDNA mutation calls
+allpower <- allpower %>% 
+  left_join(mut_clonality %>% select(sample_id, cluster_id, id, cluster_mut_no, cluster_type), by=c("sample"="sample_id", "id"="id")) %>%
+  rename("cluster_status"="cluster_type")
+
+#how many unannotated cluster_status in allpower?
+nrow(filter(allpower, is.na(cluster_status))) #78,625 rows (not unique mutations)
+filter(allpower, is.na(cluster_status)) %>% pull(sample) %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) #18-101, 17-047, 19-001, 19-037 all have >2000
+allpower %>% group_by(patient, id) %>% slice_head() %>% filter(is.na(cluster_status)) %>% nrow() #30,084 unique mutations unannotated (of 421,934)
+allpower %>% group_by(patient, id) %>% slice_head() %>% filter(is.na(cluster_status)) %>% pull(patient) %>% table() %>% as.data.frame() %>% arrange(desc(Freq))
+
+#write.csv(allpower, "cfDNAPower_BEDfiltered_TumorMuts_withClonality.csv", row.names=F)
+```
+
+collapse to unique mutation per patient **USE THIS ONE**
+-powered = power > 0.8 from any tumor
+```{r}
+collapsed_power <- allpower %>%
+  group_by(cfSample, id) %>%
+  summarise(powered = any(power>0.8), .groups = "drop") %>%
+  left_join(allpower %>% select(cfSample, patient, id, Func.refGene, Gene.refGene, cfDNA_TFx, type, Ref_reads_ctDNA, Alt_reads_ctDNA, Total_reads_ctDNA,CAC3 ,cluster_id, cluster_mut_no, cluster_status) %>% unique(), by = join_by(cfSample, id))
+
+write.csv(collapsed_power, "cfDNAPower_TITANTFx_Collapsed_BEDfiltered_TumorMuts_withClonality.csv", row.names=F)
+
+collapsed_power <- read_csv("cfDNAPower_Collapsed_BEDfiltered_TumorMuts_withClonality.csv", show_col_types = F)
+```
+
+annotate driver info
+```{r}
+#patient <- unique(allpower$patient)
+patient <- unique(collapsed_power_TITAN$patient)
+#all muts annotated pyclone output
+drivers <- data.frame()
+for (pat in patient){
+  filename1 <- paste0("data/",pat,"/UW_tvaf1per/filters_set2/noGATK/with_indels/cluster_7/", pat,"_no_primary_output_annovarUnique.tsv")
+  filename2 <- paste0("data/",pat,"/UW_tvaf1per/filters_set2/noGATK/with_indels/cluster_7/", pat,"_with_primary_output_annovarUnique.tsv")
+  filename <- ifelse(file.exists(filename1), filename1, filename2)
+  df1 <- read_delim(filename, delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F) %>%
+    mutate(patient = pat)
+  drivers <- rbind(drivers, df1)}
+drivers1 <- drivers
+drivers <- drivers %>% 
+  mutate(varID = paste(Chr, Start, Ref, sep = "_"), 
+         id = paste(Chr, Start, Ref, Alt, sep = "_")) %>%
+  select(varID, id, patient, Func.refGene, Gene.refGene, cosmic70:IsDriverWhichCancer, pathogenic_3m_updated, IsDriverBLCAupdated) %>%
+  distinct()
+
+drivers <- drivers %>% select(id, patient, cosmic70:IsDriverWhichCancer, pathogenic_3m_updated, IsDriverBLCAupdated) %>% distinct()
+
+collapsed_power_TITAN <- collapsed_power_TITAN %>%
+  left_join(drivers)
+  #left_join(drivers, by=c("id"="id", "patient"="patient"))
+
+#write.csv(collapsed_power_TITAN, "cfDNAPower_TITANTFx_Collapsed_BEDfiltered_TumorMuts_withClonality_TPbed.csv", row.names = F)
+
+#write.csv(collapsed_power, "cfDNAPower_TITANTFx_Collapsed_BEDfiltered_TumorMuts_withClonality.csv", row.names=F)
+```

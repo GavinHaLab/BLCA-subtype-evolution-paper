@@ -1,0 +1,90 @@
+---
+title: "TFx_determinants"
+output: html_document
+date: "2025-05-21"
+---
+
+```{r message=FALSE, warning=FALSE}
+library(ggpubr)
+library(rstatix)
+library(pals)
+library(lubridate)
+library(tidyverse)
+```
+
+import
+```{r}
+TFx <- read.csv('cfDNA/cfDNA_sample_info.csv')
+
+clinical <- read.csv('clinical_data/all_clinical_data_updated.csv')
+
+pathology_block <- read.csv('clinical_data/pathology_byBlock.csv')
+pathology_pat <- read.csv('clinical_data/pathology_byPatient.csv')
+```
+
+```{r}
+#colors
+mycol <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD_focal"="#ACD7A0", "UCSD"="#43823D", "UC-sarcomatoid"= "#E7CB94",
+           "Founder"= "#FEC216", "Shared"= "#2B3990","Subclonal"="#2B3990", "Private"= "#C91220", 
+           "Targeted"="#FD8D3C","Targeted_high"="#FD8D3C", "Targeted_low"="#FD8D3C",  "WGS"="#00BFC4") 
+FSP_col <- c("Founder"= "#FEC216", "Shared"= "#3B4F8F", "Private"= "#CE414B") 
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+theme_set(theme_bw() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+my_classic <- theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black"))
+
+
+supp <- 'Supplementary_Figure16_cfDNA/mut_overlap_raw_images/'
+```
+
+liver mets
+```{r}
+liv <- pathology_block %>%
+  filter(!grepl("(N)", Tissue_Type), grepl("Liver|Liber", Tissue_Type), Percent_Cancer>10) %>%
+  group_by(Patient) %>%
+  summarise(n_liver = n())
+
+liv <- TFx %>%
+  select(Patient, TFx, n_tumors, hist_patient) %>%
+  filter(!is.na(TFx)) %>%
+  left_join(liv) %>%
+  mutate(n_liver = case_when(is.na(n_liver)~0, .default = n_liver),
+         liv_level = case_when(n_liver<3~"0-1", n_liver>=3~"3-4"), 
+         hist_patient = case_match(hist_patient, "UC_UCSD"~"UCSD", .default = hist_patient), 
+         treat_at_death = case_when(Patient %in% on~"on_treatment", .default = "off_treatment"), 
+         liv_treat = case_when(liv_level=="3-4"&treat_at_death=="on_treatment"~"highLiv_onTreat", 
+                               liv_level=="3-4"&treat_at_death=="off_treatment"~"highLiv_offTreat", 
+                               liv_level=="0-1"~"lowLiv"), 
+         liv_treat = factor(liv_treat, levels=c("lowLiv", "highLiv_offTreat", "highLiv_onTreat"))) 
+#write.csv(liv, 'cfDNA/TFx_determinants.csv', row.names = F)
+
+#median = 0.03937 (0-1) ; 0.26595 (3-4)
+liv %>%
+  group_by(liv_level) %>%
+  summarise(med = median(TFx))
+
+# 0-1 vs 3-4
+stat.test <- liv %>%
+  wilcox_test(TFx~liv_level) %>%
+  add_xy_position()
+liv %>%
+  ggplot(aes(x=liv_level, y=TFx)) +
+    geom_boxplot() +
+    geom_jitter(width=0.2, height=0, size=3, alpha=0.8, shape=21, fill="black", stroke=NA) +
+    #stat_pvalue_manual(stat.test) +
+    coord_cartesian(ylim=c(0,1)) +
+    labs(x="# liver mets", y="TFx")
+    labs(x="# liver mets", y="TFx", caption="wilcox p")
+ggsave(paste0(supp, "TFx_byLiverMets_nostats.pdf"), width=2, height=2.5)
+```
+
+
+

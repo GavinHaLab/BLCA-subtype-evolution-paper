@@ -1,0 +1,877 @@
+---
+title: "Overlap_NoPower"
+output: html_document
+date: "2024-11-02"
+---
+
+libraries
+```{r include=FALSE}
+library(data.table)
+library(pals)
+library(ggpubr)
+library(rstatix)
+library(GenomicRanges)
+library(rtracklayer)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(ggbeeswarm)
+library(tidyverse)
+
+wd <- "cfDNA/With_TopOff/Overlap/"
+wd_corr <- "cfDNA/With_TopOff/Overlap/Correlations/"
+figs <- 'Figure7/raw_images/Mutation_overlap/'
+fig_corr <- 'Figure7/raw_images/Mutation_overlap/Correlations/'
+supp <- 'Supplementary_Figure16_cfDNA/mut_overlap_raw_images/'
+supp_corr <- 'Supplementary_Figure16_cfDNA/mut_overlap_raw_images/Correlations/'
+sup_table <- 'Supplementary_Tables/cfDNA/'
+```
+
+get tissue tumor purity & cfDNA TFx
+```{r include=FALSE}
+#sample df
+inputs <- read_csv("cfDNA/With_TopOff/PowerCalc/CAC_sh_inputs.csv") %>%
+  select(patient, seqType, ID)
+
+#Oct 2024 updated TITAN TFx with Top Off for WGS cfDNA
+DEEP_TFx <- read_delim("BC-TAN_TFX_Subtype_cfDNA.tsv", delim = "\t", show_col_types = F) %>%
+  mutate(patient = substr(sample, 8,13)) %>%
+  left_join(inputs %>% filter(seqType=="cfWGS")) %>%
+  rename(sample_id=ID, type=seqType, cfDNA_TFx = TITAN_tfx_topOffs, preTopOff_TFx=tfx, patient_id=patient) %>% 
+  mutate(cfSample = paste0(sample_id, "_", type))
+#ichor TFx for targeted cfDNA (not updated, but correct- didn't need to rerun ULP w/ July 2024 updates)
+ULP_TFx <- read_csv("sample_details_tumorfractions_clinical.csv")[,1:6] %>%
+  filter(grepl("ULP", type)) %>%
+  rename(cfDNA_TFx = ichor_tfx) %>%
+  mutate(cfSample = paste0(sample_id, "_", type))
+
+#combine TFx:
+##using ichor ULP TFx for all TP, TITAN TFx for all WGS
+TFx_cfDNA <- rbind(DEEP_TFx %>% select(cfSample, sample_id, patient_id, type, cfDNA_TFx), ULP_TFx %>% select(cfSample, sample_id, patient_id, type, cfDNA_TFx))
+##using TITAN TFx for all if patient had WGS, or ichor TFx for patients without deep WGS
+TITAN_TFx_cfDNA <- data.frame()
+samps <- unique(c(DEEP_TFx$cfSample[1:8], ULP_TFx$cfSample))
+for(samp in samps){
+  pat <- substr(samp, 1, 6)
+  has_WGS <- nrow(DEEP_TFx %>% filter(patient_id==pat))>0
+  if(has_WGS){TFx = DEEP_TFx %>% filter(patient_id==pat) %>% pull(cfDNA_TFx)} else {TFx = ULP_TFx %>% filter(cfSample==samp) %>% pull(cfDNA_TFx)}
+  temp <- data.frame(patient = pat, cfSample = samp, cfDNA_TFx = TFx)
+  TITAN_TFx_cfDNA <- bind_rows(TITAN_TFx_cfDNA, temp)
+}
+
+#December 2024 updated TITAN TFx for WGS tissue
+tumor_purity <- read_csv("WGS_purity_ploidy_curated_Dec2024.csv") %>%
+  filter(!original_sample_id %in% c("18-101M3", "17-047pD10", "18-120pA14", "19-044pB11", "19-004J1-007")) %>% #remove low purity samples
+  mutate(sample_id = case_match(original_sample_id, "TAN4-16-079-P1-P2-FFPE"~"16-079_Primary-FF", .default = sample_id))
+```
+
+tumor sample info
+```{r}
+sample_info <- read.csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv')
+```
+
+input tumor SNV df
+```{r}
+tumor <- read.csv("cfDNA/With_TopOff/WGS_tissue_SNVs_BEDfiltered.csv") %>%
+  filter(!sample %in% c("18-101M3", "17-047pD10", "18-120pA14", "19-044pB11", "19-004J1-007J1")) #remove low purity samples
+```
+
+annotation/graphing
+```{r}
+#annotate WES vs WGS
+patient <- c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037')
+ann_WES <- data.frame(patient = sort(patient), seq_type = c(rep("WES", 7), rep("WGS", 13)))
+
+#colors
+mycol <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD_focal"="#ACD7A0", "UCSD"="#43823D", "UC-sarcomatoid"= "#E7CB94",
+           "Founder"= "#FEC216", "Shared"= "#2B3990","Subclonal"="#2B3990", "Private"= "#C91220", 
+           "Targeted"="#FD8D3C","Targeted_high"="#FD8D3C", "Targeted_low"="#FD8D3C",  "WGS"="#00BFC4") 
+FSP_col <- c("Founder"= "#FEC216", "Shared"= "#3B4F8F", "Private"= "#CE414B") 
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+theme_set(theme_bw() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+my_classic <- theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black"))
+```
+
+import overlap df with CAC & power & clonality
+```{r}
+#original, using 1 TFx per patient (TITAN prioritized)
+allpower_TITAN <- read_csv("cfDNA/With_TopOff/cfDNAPower_TITANTFx_BEDfiltered_TumorMuts.csv", show_col_types = F) 
+```
+
+collapse to unique mutation per patient **USE THIS ONE**
+-powered = power > 0.8 from any tumor
+```{r}
+collapsed_power_TITAN <- read_csv("cfDNA/With_TopOff/cfDNAPower_TITANTFx_Collapsed_BEDfiltered_TumorMuts_withClonality_TPbed.csv", show_col_types = F)
+```
+
+### Subset TP to BED file w/ 150bp pad ##
+
+import TP BED file (with 150bp buffer)
+```{r}
+TPbed_hg38_thomas150 <- import.bed("BroadPanCancer2019.bed.cp.hg38.buffer.txt")
+```
+
+which tumor mutations could be captured by TP BED
+```{r}
+#all tumor mutations
+cfTP <- collapsed_power_TITAN %>% filter(type=="Targeted") %>%
+  select(cfSample, id, Gene.refGene) %>%
+  mutate(Chr = sub("_.*", "", id), 
+         Start = as.numeric(sub(".*_(\\d+)_.*", "\\1", id)), 
+         End = as.numeric(sub(".*_(\\d+)_.*", "\\1", id)))
+
+#make into GRanges
+G_cfTP <- GRanges(seqnames = cfTP$Chr, 
+                            ranges = IRanges(start=cfTP$Start, end=cfTP$End), 
+                            name=cfTP$id, 
+                            Gene = cfTP$Gene.refGene, 
+                            sample = cfTP$cfSample)
+
+#find overlaps between mutations and 150bp buffer TP BED file
+cfTP_inBED <- as.data.frame(subsetByOverlaps(G_cfTP, TPbed_hg38_thomas150)) #no buffer = 718 tumor mutations in TP BED file range; thomas 150buffer = 736 in BED range
+
+#add column to collapsed_power_TITAN with whether the tumor mutation is covered by the targeted panel
+inBED <- cfTP_inBED %>% pull(name)
+collapsed_power_TITAN <- collapsed_power_TITAN %>% 
+  mutate(in_TPBED = case_when(type == "WGS"~"Yes", 
+                              id %in% inBED~"Yes", .default = "No"))
+```
+
+write out with 150bp BED file column
+```{r}
+write_csv(collapsed_power_TITAN, "cfDNA/With_TopOff/cfDNAPower_TITANTFx_Collapsed_BEDfiltered_TumorMuts_withClonality_TPbed.csv")
+```
+
+
+### GRAPHING ###
+
+set up capture dfs
+```{r}
+WGS <- DEEP_TFx %>% filter(type=="cfWGS") %>% pull(patient_id)
+
+CAC3_bycfSample <- collapsed_power_TITAN %>% filter(in_TPBED=="Yes") %>%
+  filter(cfSample!="19-001_1095_ULP-WGS") %>% #remove 19-001 serum sample, only keep 19-001 plasma sample
+  select(cfSample, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(total = CAC_called_3 + CAC_under_3, 
+         percent = CAC_called_3/(CAC_called_3 + CAC_under_3), 
+         type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         patient = substr(cfSample, 1, 6)) %>%
+  left_join(TITAN_TFx_cfDNA %>% select(cfSample, cfDNA_TFx)) %>%
+  left_join(ann_WES) %>%
+  mutate(type = factor(type, levels=c("WGS", "Targeted")), 
+         highlow = case_when(patient %in% WGS~"High", .default = "Low"),
+         type_highlow = case_when(type=="WGS"~"WGS", type=="Targeted"&highlow=="High"~"Targeted_high", type=="Targeted"&highlow=="Low"~"Targeted_low"),
+         cluster_status="Total", 
+         type_highlow=factor(type_highlow, levels=c("WGS", "Targeted_high", "Targeted_low")))
+#write.csv(CAC3_bycfSample, paste0(sup_table, "CaptureProportion_bySample.csv"), row.names = F)
+
+
+CAC3_byClonality <- collapsed_power_TITAN %>% filter(in_TPBED=="Yes") %>%
+  filter(cfSample!="19-001_1095_ULP-WGS") %>% #remove 19-001 serum sample, only keep 19-001 plasma sample
+  select(cfSample,cluster_status, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(total = CAC_called_3 + CAC_under_3, 
+         percent = CAC_called_3/(CAC_called_3 + CAC_under_3), 
+         type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         patient = substr(cfSample, 1, 6)) %>%
+  left_join(TFx_cfDNA %>% select(cfSample, cfDNA_TFx)) %>%
+  left_join(ann_WES) %>%
+  mutate(cluster_status = factor(cluster_status, levels=c("Founder", "Shared", "Private")), 
+         highlow = case_when(patient %in% WGS~"High", .default = "Low"),
+         type_highlow = case_when(type=="WGS"~"WGS", type=="Targeted"&highlow=="High"~"Targeted_high", type=="Targeted"&highlow=="Low"~"Targeted_low"),
+         type=factor(type, levels=c("WGS", "Targeted")), 
+         type_highlow=factor(type_highlow, levels=c("WGS", "Targeted_high", "Targeted_low")))
+#write.csv(CAC3_byClonality, paste0(sup_table, "CaptureProportion_bySample_byFSP.csv"), row.names = F)
+
+##df for all:
+all_df <- rbind(CAC3_bycfSample, CAC3_byClonality) %>%
+  mutate(cluster_status = factor(cluster_status, levels=c("Total", "Founder", "Shared", "Private")), 
+         type=factor(type, levels=c("WGS", "Targeted")))
+```
+
+calculate medians
+```{r}
+#total: WGS = 70%, TP = 50%
+CAC3_bycfSample %>%
+  group_by(type) %>%
+  summarise(med = median(percent))
+#total: WGS = 70%, TP_high = 71%, TP_low = 34%
+CAC3_bycfSample %>%
+  group_by(type_highlow) %>%
+  summarise(med = median(percent))
+
+#by Clonality
+## WGS: F = 97.9%, S = 90.1%, P = 28.3%
+## TP : F = 81.6%, S = 31.5%, P = 16.7%
+CAC3_byClonality %>%
+  group_by(type, cluster_status) %>%
+  summarise(med = median(percent, na.rm=T))
+
+## WGS.    : F = 97.9%,  S = 90.1%, P = 28.3%
+## TP_high : F = 100.0%, S = 78.6%, P = 31.5%
+## TP_low  : F = 65.9%,  S = 29.6%, P = 10.0%
+CAC3_byClonality %>%
+  group_by(type_highlow, cluster_status) %>%
+  summarise(med = median(percent, na.rm=T))
+```
+
+graph overall CAC3 capture
+```{r}
+CAC3_bycfSample %>% 
+  ggplot(aes(x=type_highlow, y=percent, group=type_highlow)) +
+    geom_boxplot(aes(fill=type_highlow), show.legend = F, outlier.shape = NA) +
+    geom_quasirandom(aes(fill=patient), size=3, height = 0, width=0.25, shape=21) +
+    scale_fill_manual(values=c(mycol, pat_col), breaks=names(pat_col)) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    scale_y_continuous(limits = c(0,1), breaks=seq(0,1,0.2), minor_breaks = NULL) +
+   labs(title="% of all mutations captured by cfDNA", x="", y="Capture Proportion", fill="Patient", shape="Tumor Seq Type")
+ggsave(paste0(wd, "CAC3_all_TPBED150filtered_byType_highlowTFxBox.pdf"), width = 5, height=4)
+ggsave(paste0(figs, "CAC3_all_TPBED150filtered_byType_highlowTFxBox.pdf"), width = 4.5, height=4)
+```
+
+graph CAC3 capture by clonality
+```{r}
+#separate high low TFx
+stat.test <- CAC3_byClonality %>%
+  group_by(type_highlow) %>%
+  wilcox_test(percent~cluster_status) %>%
+  add_xy_position(step.increase = 0.1)
+CAC3_byClonality %>%
+  ggplot(aes(x=cluster_status, y=percent, group=cluster_status)) +
+    geom_boxplot(aes(fill=cluster_status), show.legend = F, outlier.shape = NA, color="black") +
+    stat_summary(fun = median, geom = "crossbar", width = 0.7, color = "white") +
+    geom_jitter(aes(fill=patient), size=3, height = 0, width=0.25, shape=21) +
+    scale_fill_manual(values=c(mycol, pat_col), breaks=names(pat_col)) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    #stat_pvalue_manual(stat.test, tip.length = 0, label="p.adj") +
+    facet_grid(cols=vars(type_highlow)) +
+    scale_y_continuous(limits = c(0,1), breaks=seq(0,1,0.2), minor_breaks = NULL) +
+   labs(title="% of all mutations captured by cfDNA", x="", y="Capture Proportion", fill="Patient", shape="Tumor Seq Type")
+ggsave(paste0(wd, "CAC3_all_TPBED150filtered_byType_byClonality_highlowTFxBox.pdf"), width = 7, height=4)
+ggsave(paste0(figs, "CAC3_all_TPBED150filtered_byType_byClonality_highlowTFxBox_withstats.pdf"), width = 7, height=3.5)
+```
+
+### CORRELATIONS ###
+
+graph capture-TFx correlation
+```{r}
+#separate TP vs WGS by clonality **S16C**
+CAC3_byClonality %>%
+  ggplot(aes(x=cfDNA_TFx, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient), size=3, shape=21) +
+    stat_cor(label.x.npc = 0, label.y = 0.1,method = "spearman") +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    scale_y_continuous(limits = c(0,1), breaks=seq(0,1,0.2), minor_breaks = NULL) +
+    facet_grid(rows=vars(type), cols = vars(cluster_status)) +
+    labs(title="% of all mutations captured by cfDNA", x="cfDNA TFx", y="Capture Proportion", fill ="Patient", caption="spearman corr")
+ggsave(paste0(wd_corr, "CAC3_all_TPBED150filtered_correlation_TITANTFx_byType_byClonality.pdf"), width = 8, height=6)
+ggsave(paste0(supp_corr, "CAC3_TITANTFx_byType_byClonality.pdf"), width = 8, height=4.5)
+```
+
+set up CP information
+```{r}
+CP <- read_csv('Metastatic_Seeding/patient_cluster_CP.csv', show_col_types = F)
+sample_CP <- read_csv('Metastatic_Seeding/sample_cluster_CP.csv', show_col_types = F)
+
+private_samples <- sample_CP %>% filter(cellular_prevalence>.03, cluster_type=="Private") %>%
+  mutate(Block_Letter = case_when(patient %in% c("15-108", "15-109", "16-070", "16-079", "16-097", "17-020", "17-026")~substr(sample_id, 8,8), 
+                                  .default = substr(sample_id, 7,7)))
+
+CAC3_byCluster <- collapsed_power_TITAN %>% filter(in_TPBED=="Yes") %>%
+  filter(cfSample!="19-001_1095_ULP-WGS") %>%
+  select(cfSample, cluster_id, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(total = CAC_called_3 + CAC_under_3, 
+         percent = CAC_called_3/(CAC_called_3 + CAC_under_3), 
+         type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         patient = substr(cfSample, 1, 6), 
+         cluster_id = as.numeric(as.character(cluster_id))) %>%
+  left_join(TITAN_TFx_cfDNA %>% select(cfSample, cfDNA_TFx)) %>%
+  left_join(ann_WES) %>%
+  left_join(CP %>% select(patient, cluster_id, cluster_type, cellular_prevalence, cluster_mut_no, n_CP3)) %>%
+  filter(!is.na(cluster_type)) %>%
+  mutate(weighted_CP = n_CP3*cellular_prevalence, 
+         weighted_CP_TFx = n_CP3*cellular_prevalence*cfDNA_TFx, 
+         weighted_CP_TFx_num = n_CP3*cellular_prevalence*cfDNA_TFx/cluster_mut_no, 
+         cluster_type = factor(cluster_type, levels=c("Founder", "Shared", "Private")))
+#write.csv(CAC3_byCluster, paste0(sup_table, "CaptureProportion_bySample_byClone.csv"), row.names = F)
+```
+
+set up pathology information
+```{r}
+necrosis <- read_csv('Pathology/Purity_Necrosis.csv', show_col_types = F)[,1:7]
+sup_table_clinical <- 'Supplementary_Tables/clinical_data/'
+
+#average necrosis & purity for each sample in pathology, across sections from same block
+necrosis_allSamples <- necrosis %>% select(Patient, Block_Letter, Percent_Cancer, Percent_Necrosis) %>%
+  mutate(Percent_Necrosis = as.numeric(Percent_Necrosis)) %>%
+  group_by(Patient, Block_Letter) %>%
+  summarise(Percent_Cancer = mean(Percent_Cancer, na.rm = T), 
+            Percent_Necrosis = mean(Percent_Necrosis, na.rm = T), 
+            n_sections_tumor = n()) %>% ungroup() %>%
+  left_join(necrosis %>% filter(!is.na(Tissue_Type)) %>% distinct(Patient, Block_Letter, Tissue_Type))
+#write.csv(necrosis_allSamples, paste0(sup_table_clinical, "pathology_byBlock.csv"), row.names = F)
+
+
+#get total number of tumors in each patient (with a purity of >30% cancer)
+n_tumors_30 <- necrosis_allSamples %>% 
+  filter(Percent_Cancer>=30) %>%
+  group_by(Patient) %>%
+  summarise(n_tumors_30 = n())
+
+#get number of sections for each of the tumors -> estimate of size?
+sections_patient <- necrosis %>%
+  filter(Percent_Cancer>10) %>%
+  group_by(Patient) %>%
+  summarise(n_sections_patient = n()) %>% ungroup()
+sections <- necrosis %>%
+  filter(Percent_Cancer>10) %>%
+  group_by(Patient, Block_Letter) %>%
+  summarise(n_sections = n()) %>% ungroup() %>%
+  left_join(sections_patient) %>%
+  mutate(block_of_total = n_sections/n_sections_patient)
+
+#get how much our sequenced tumors were of the entire tumor burden in patient
+seq_burden <- allpower_TITAN %>% distinct(sample) %>%
+  mutate(Patient = substr(sample, 1, 6)) %>%
+  mutate(Block_Letter = case_when(Patient %in% c("15-108", "15-109", "16-070", "16-079", "16-097", "17-020", "17-026")~substr(sample, 8,8), 
+                                  .default = substr(sample, 7,7))) %>%
+  left_join(sections) %>%
+  group_by(Patient) %>%
+  summarise(proportion_sequenced = sum(block_of_total, na.rm = T), 
+            n_sections_sequenced = sum(n_sections, na.rm = T)) %>% ungroup() %>%
+  left_join(sections_patient)
+#get average necrosis % for the tumors we sequenced from each patient 
+necrosis_patient <- allpower_TITAN %>% distinct(sample) %>%
+  mutate(Patient = substr(sample, 1, 6)) %>%
+  mutate(Block_Letter = case_when(Patient %in% c("15-108", "15-109", "16-070", "16-079", "16-097", "17-020", "17-026")~substr(sample, 8,8), 
+                                  .default = substr(sample, 7,7))) %>%
+  left_join(necrosis_allSamples) %>%
+  group_by(Patient) %>%
+  summarise(Percent_Cancer = mean(Percent_Cancer, na.rm=T), 
+            Percent_Necrosis = mean(Percent_Necrosis, na.rm=T)) %>% ungroup() %>%
+  left_join(n_tumors_30) %>%
+  left_join(seq_burden)
+#write.csv(necrosis_patient, paste0(sup_table_clinical, "pathology_byPatient.csv"), row.names = F)
+
+necrosis_plot <- CAC3_byCluster %>%
+  left_join(necrosis_patient, by=c("patient"="Patient")) 
+
+#get necrosis percent specific to each mut cluster (for the tumors that cluster was actually in)
+necrosis_plot_private <- necrosis_plot %>% filter(cluster_type=="Private") %>% #only looking at private cluster capture
+  left_join(private_samples %>% select(patient, sample_id, cellular_prevalence, cluster_id, cluster_type, Block_Letter)) %>% #pull the sample that private cluster is in
+  select(-Percent_Cancer, -Percent_Necrosis) %>%
+  left_join(necrosis_allSamples, by=c("patient"="Patient", "Block_Letter"="Block_Letter")) %>% #pull pathology information for that tumor
+  left_join(sample_info %>% select(patient, block_letter, tumor_site_group), by=c("patient"="patient", "Block_Letter"="block_letter")) %>%
+  mutate(tumor_site_group= case_when(is.na(tumor_site_group)~"Primary", .default = tumor_site_group))
+
+#write.csv(necrosis_plot_private, 'Supplementary_Tables/cfDNA/privateCapture_byTumor_pathology.csv', row.names = F)
+```
+
+CP correlation
+```{r}
+#correlation with CP **S16D**
+CAC3_byCluster %>%
+  ggplot(aes(x=cellular_prevalence, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient), size=3, shape=21) +
+    #stat_cor(label.x.npc = 0, label.y = -0.1, method = "spearman") +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    coord_cartesian(ylim=c(-0.15,1.05), xlim=c(-0.05,1.05)) + 
+    facet_grid(rows=vars(type), cols = vars(cluster_type)) +
+    labs(x="Clone CP", title="Capture Correlation to CP per clone")
+ggsave(paste0(wd_corr, "CAC3_byClone_byType_byClonality_correlationCP.pdf"), width = 8, height=5)
+ggsave(paste0(supp_corr, "CAC3_byClone_byType_byClonality_correlationCP_nostats.pdf"), width = 8, height=4.5)
+
+#correlation with clone abundance*TFx (CP * # tumors * TFx) **7D**
+## FSP 
+CAC3_byCluster %>%
+  ggplot(aes(x=weighted_CP_TFx, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient), size=3, shape=21) +
+    stat_cor(label.x.npc = 0, label.y = -0.1, method = "spearman") +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    coord_cartesian(ylim=c(-0.15,1.05)) +
+    facet_grid(rows=vars(type), cols = vars(cluster_type), scales = "free_x") +
+    labs(x="weighted_CP_TFx (CP * # tumors * TFx)")
+ggsave(paste0(wd_corr, "CAC3_byClone_byType_byClonality_correlationWeightedCPTITANTFx.pdf"), width = 8, height=5)
+ggsave(paste0(fig_corr, "CAC3_byClone_byType_byClonality_correlationWeightedCPTITANTFx.pdf"), width = 8, height=5)
+
+## JUST SHARED
+CAC3_byCluster %>%
+  filter(cluster_type =="Shared", percent!="NaN") %>% 
+  mutate(type = factor(type, levels=c("WGS", "Targeted"))) %>%
+  ggplot(aes(x=weighted_CP_TFx, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient), size=3, shape=21) +
+    stat_cor(label.x.npc = 0, label.y = -0.1, method = "spearman") + coord_cartesian(ylim=c(-0.15,1.05)) +
+    #scale_y_continuous(breaks=seq(0,1,0.2)) + coord_cartesian(ylim=c(0,1)) +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    facet_grid(cols=vars(type), scales = "free_x") +
+    labs(x="weighted_CP_TFx (CP * # tumors * TFx)")
+ggsave(paste0(wd_corr, "CAC3_byClone_byType_SHARED_correlationWeightedCPTITANTFx.pdf"), width = 6, height=2.5)
+ggsave(paste0(fig_corr, "CAC3_byClone_byType_SHARED_correlationWeightedCPTITANTFx.pdf"), width = 6, height=2.5)
+```
+
+CT tumor volume
+```{r}
+CT_vol <- read.csv('cfDNA/OM_CT_Tumor_Volumes.csv')
+
+total_CT_vol <- CT_vol %>%
+  filter(Scan_order =="Last") %>%
+  group_by(Patient) %>%
+  summarise(total_vol = sum(Volume_cc))
+CT_pat <- unique(CT_vol$Patient)
+
+pred_CT_vol <- CT_vol %>%
+  select(Patient, Tumor_site, Scan_order, Volume_cc) %>%
+  pivot_wider(names_from = "Scan_order", values_from = "Volume_cc") %>%
+  mutate(diff_vol = Last-First, 
+         predicted = case_when(is.na(diff_vol)~Last, .default= Last + diff_vol), 
+         predicted = case_when(predicted<0~Last,  .default = predicted)) 
+
+#figure out individual tumor capture by private mutations
+private_samples <- sample_CP %>% filter(cellular_prevalence>.03, cluster_type=="Private") %>%
+  mutate(Block_Letter = case_when(patient %in% c("15-108", "15-109", "16-070", "16-079", "16-097", "17-020", "17-026")~substr(sample_id, 8,8), 
+                                  .default = substr(sample_id, 7,7)))
+private_capture <- CAC3_byCluster %>% filter(cluster_type=="Private") %>% #only looking at private cluster capture
+  left_join(private_samples %>% select(patient, sample_id, cellular_prevalence, cluster_id, cluster_type, Block_Letter)) %>% #pull the sample that private cluster is in
+  left_join(sample_info %>% select(patient, block_letter, tumor_site, tumor_site_group), by=c("patient"="patient", "Block_Letter"="block_letter"))
+# CT = seq (match names)
+CT_seq_names <- c("16-070_Liver"="16-070_H7_Liver-Met",
+"16-097_Liver"="16-097_L2_Liver-Met", 
+"16-097_Liver"= "16-097_J5_Liver-Met",
+"16-097_Rt Lung" = "16-097_H1_R-Lung-Met",
+"16-097_Lt Lung" = "16-097_G2_Lung-Met",
+"17-020_Rt Pleura" = "17-020-G3",
+"17-020_Rt Lung" = "17-020-H4",
+"17-020_Primary (Bladder)" = "17-020-P2",
+"17-020_Lt Lung" = "17-020-N1",
+"17-026_Primary (Bladder) " = "17-026-K2",
+"17-071_Mesentery" = "17-071G6",
+"18-065_Uterus" = "18-065G1",
+"18-065_Lymph Node" = "18-065I1",
+"18-101_Liver" = "18-101G1", 
+"18-101_Liver" = "18-101K2")
+
+CT_pertumor <- CT_vol %>%
+  filter(Scan_order == "Last") %>%
+  mutate(id = paste0(Patient, "_", Tumor_site)) %>%
+  select(Patient, Tumor_site, Volume_cc, id)
+CT_pertumor$sample_id <- CT_seq_names[CT_pertumor$id]
+
+
+#add 16-097 liver and 18-101 liver rows separately to combine two private clusters
+private_CT_vol <- private_capture %>%
+  filter(cluster_type=="Private", patient %in% CT_pat) %>%
+  distinct() %>%
+  left_join(CT_pertumor %>% select(sample_id, Volume_cc)) %>%
+  filter(!is.na(Volume_cc)) %>%
+  mutate(type = factor(type, levels=c("WGS", "Targeted"))) %>%
+  filter(!sample_id %in% c("16-097_L2_Liver-Met", "18-101G1")) %>%
+  left_join(necrosis_plot_private %>% select(cfSample, sample_id, tumor_site_group, Percent_Cancer)) %>%
+  select(cfSample, patient, type, cfDNA_TFx, CAC_called_3, total, percent, cellular_prevalence, Volume_cc, tumor_site_group, Percent_Cancer)
+df1 <- necrosis_plot_private %>% filter(patient %in% c("16-097", "18-101"), tumor_site_group == "Liver") %>%
+  select(patient, sample_id, tumor_site_group, Percent_Cancer, Percent_Necrosis) %>% distinct() %>%
+  group_by(patient) %>%
+  summarise(Percent_Cancer = mean(Percent_Cancer))
+df <- private_capture %>%
+  filter(patient %in% c("16-097", "18-101"), tumor_site_group=="Liver") %>% arrange(cfSample) %>%
+  group_by(cfSample) %>%
+  summarise(CAC_called_3 = sum(CAC_called_3), 
+            total=sum(total), 
+            cellular_prevalence = mean(cellular_prevalence),
+            type = unique(type), patient = unique(patient), cfDNA_TFx = unique(cfDNA_TFx), tumor_site_group= "Liver") %>%
+  mutate(percent = CAC_called_3/total) %>%
+  left_join(CT_pertumor %>% filter(Patient %in% c("16-097", "18-101"), Tumor_site=="Liver") %>% select(Patient, Volume_cc), by=c("patient"="Patient")) %>%
+  left_join(df1)
+private_CT_vol <- rbind(private_CT_vol, df)
+
+#write.csv(private_capture %>% select(patient, sample_id:tumor_site_group, cfSample:type, cfDNA_TFx:cellular_prevalence), 'Supplementary_Tables/cfDNA/privateCapture_byTumor.csv', row.names = F)
+#write.csv(private_CT_vol, 'Supplementary_Tables/cfDNA/privateCapture_byTumor_CTvol.csv', row.names = F)
+```
+
+correlation with CT vol
+```{r}
+## per tumor volume / private capture only
+
+#using just last scan volume (per tumor) **S16F**
+private_CT_vol %>%
+  filter(percent!="NaN", type =="Targeted") %>% 
+  ggplot(aes(x=Volume_cc, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient), shape=21, size=3) +
+    stat_cor(label.x.npc = 0, label.y.npc = 0.9,method = "spearman") +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    scale_shape_manual(values=c(21:25)) +
+    guides(fill=guide_legend(ncol=1, override.aes = list(shape = 21))) +
+    scale_y_continuous(breaks=seq(0,1,0.2), minor_breaks = NULL) +
+    coord_cartesian(ylim=c(0,1)) +
+    labs(y="Capture Proportion", fill ="Patient", caption="spearman corr")
+ggsave(paste0(wd_corr, "CAC3_CTvol_Private_correlation_Volume.pdf"), width=4.25, height=3)
+ggsave(paste0(fig_corr, "CAC3_CTvol_Private_correlation_Volume.pdf"), width=4.25, height=3)
+ggsave(paste0(supp_corr, "CAC3_CTvol_Private_correlation_Volume.pdf"), width=4.25, height=3)
+
+
+#scan volume * pathology purity **7F**
+private_CT_vol %>%
+  filter(percent!="NaN", type =="Targeted") %>% 
+  ggplot(aes(x=Volume_cc*Percent_Cancer/100, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient, shape = tumor_site_group), size=3) +
+    stat_cor(label.x.npc = 0, label.y.npc = 0.9,method = "spearman") +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    scale_shape_manual(values=c(21:25)) +
+    guides(fill=guide_legend(ncol=1, override.aes = list(shape = 21))) +
+    scale_y_continuous(breaks=seq(0,1,0.2), minor_breaks = NULL) +
+    coord_cartesian(ylim=c(0,1)) +
+    labs(y="Capture Proportion", fill ="Patient", caption="spearman corr")
+ggsave(paste0(wd_corr, "CAC3_CTvol_Private_correlation_VolumePurity.pdf"), width=6, height=4)
+ggsave(paste0(fig_corr, "CAC3_CTvol_Private_correlation_VolumePurity.pdf"), width=6, height=4)
+
+private_CT_vol %>%
+  filter(percent!="NaN", type =="Targeted") %>%
+  ggplot(aes(x=Volume_cc*Percent_Cancer/100, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient), shape=21, size=4) +
+    stat_cor(label.x.npc = 0, label.y.npc = 0.9,method = "spearman") +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    guides(fill=guide_legend(ncol=1, override.aes = list(shape = 21))) +
+    scale_y_continuous(breaks=seq(0,1,0.2)) +
+    coord_cartesian(ylim=c(0,1)) +
+    labs(y="Capture Proportion", fill ="Patient", caption="spearman corr")
+ggsave(paste0(fig_corr, "CAC3_CTvol_Private_correlation_VolumePurity_nostats.pdf"), width=3.6, height=3)
+```
+
+pathology - tumor specific (private only)
+```{r}
+# % cancer **7E**
+necrosis_plot_private %>%
+  mutate(type = factor(type, levels=c("WGS", "Targeted"))) %>% 
+  filter(percent!="NaN") %>% 
+  ggplot(aes(x=Percent_Cancer, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(fill=patient), size=3, shape=21) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    stat_cor(label.x.npc = 0, label.y = -0.1, method = "spearman") + coord_cartesian(ylim=c(-0.15,1.05)) +
+    #coord_cartesian(ylim=c(0,1)) +
+    scale_fill_manual(values=c(mycol, pat_col)) +
+    facet_grid(cols=vars(type), scales = "free_x") +
+    scale_y_continuous(breaks=seq(0,1,0.2)) + 
+    scale_x_continuous(breaks=seq(0,100,20)) +
+    labs(y="Private capture proportion")
+ggsave(paste0(wd_corr, "CAC3_byClone_Privates_correlationPathPurity.pdf"), width = 6, height=2.5)
+ggsave(paste0(fig_corr, "CAC3_byClone_Privates_correlationPathPurity_nostats.pdf"), width = 6, height=2.5)
+```
+
+
+
+tumor site
+```{r}
+df <- necrosis_plot_private %>% 
+  filter(percent!="NaN") %>%
+  mutate(type = factor(type, levels=c("WGS", "Targeted")), 
+         tumor_site_group = factor(tumor_site_group, levels=c("Primary", "Liver", "LN", "Lung", "Other")), 
+         highlow = case_when(patient %in% WGS~"High", .default = "Low"),
+         type_highlow = case_when(type=="WGS"~"WGS", type=="Targeted"&highlow=="High"~"Targeted_high", type=="Targeted"&highlow=="Low"~"Targeted_low"), 
+         type_highlow = factor(type_highlow, levels=c("WGS", "Targeted_high", "Targeted_low")))
+
+#write.csv(df, 'Supplementary_Figure16_cfDNA/source_data/S16E_private_byTumorSite.csv', row.names = F)
+ 
+ #separate WGS, TP 
+stat.test <- df %>%
+  group_by(type) %>%
+  wilcox_test(percent~tumor_site_group) %>%
+  add_xy_position(step.increase = 0.02)
+
+df %>%
+  ggplot(aes(x=tumor_site_group, y=percent)) +
+    geom_boxplot(fill="snow1", outlier.shape = NA) +
+    geom_jitter(width=0.2, height=0, size=3, shape=21, aes(fill=patient), show.legend = F) +
+    facet_wrap(~type) +
+    my_classic + border() +
+    #stat_pvalue_manual(stat.test %>% filter(p<0.1), label="p.adj", tip.length = 0) + 
+    scale_fill_manual(values=pat_col) +
+    scale_y_continuous(breaks=seq(0,1,0.2)) +
+    labs(y="Private Capture Proportion", caption="no sig by wilcox")
+ggsave(paste0(wd, "PrivateCapture_byTumorSite.pdf"), width=6, height=3.5)
+ggsave(paste0(supp, "PrivateCapture_byTumorSite.pdf"), width=6, height=3.5)
+```
+
+
+### DRIVERS ###
+
+set up dfs of driver mut capture
+```{r}
+#deleterious in updated driver gene
+CAC3_DelDriver <- collapsed_power_TITAN %>% filter(in_TPBED=="Yes") %>%
+  filter(pathogenic_3m_updated=="Deleterious", IsDriverBLCAupdated=="Yes") %>%
+  filter(cfSample!="19-001_1095_ULP-WGS") %>% #remove 19-001 serum sample, only keep 19-001 plasma sample
+  select(cfSample, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(total = CAC_called_3 + CAC_under_3, 
+         percent = CAC_called_3/(CAC_called_3 + CAC_under_3), 
+         type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         patient = substr(cfSample, 1, 6)) %>%
+  left_join(TITAN_TFx_cfDNA %>% select(cfSample, cfDNA_TFx)) %>%
+  left_join(ann_WES) %>%
+  mutate(type = factor(type, levels=c("WGS", "Targeted")), 
+         highlow = case_when(patient %in% WGS~"High", .default = "Low"),
+         type_highlow = case_when(type=="WGS"~"WGS", type=="Targeted"&highlow=="High"~"Targeted_high", type=="Targeted"&highlow=="Low"~"Targeted_low"),
+         cluster_status="Total", 
+         type_highlow=factor(type_highlow, levels=c("WGS", "Targeted_high", "Targeted_low")))
+CAC3_DelDriver %>% group_by(type_highlow) %>% summarise(med=median(percent)) #WGS = 92.9%, TP_high = 100%, TP_low = 63.6%
+CAC3_DelDriver %>% group_by(type_highlow) %>% summarise(total=sum(total), called = sum(CAC_called_3)) #WGS = 35/40 (88%), TP_high = 23/25 (92%), TP_low = 20/32 (63%)
+#write.csv(CAC3_DelDriver, 'Supplementary_Tables/cfDNA/CaptureProportion_bySample_DelDriver.csv', row.names = F)
+```
+
+graphing driver capture 
+```{r}
+wd_driv <- "cfDNA/With_TopOff/Overlap/Drivers/"
+figs_driv <- "Figure7/raw_images/Mutation_overlap/Drivers/"
+
+#deleterious mut in driver gene
+CAC3_DelDriver %>%
+  ggplot(aes(x=type_highlow, y=percent, group=type_highlow)) +
+    geom_boxplot(aes(fill=type_highlow), show.legend = F,width=0.6, outlier.shape = NA, color="black") +
+    stat_summary(fun = median, geom = "crossbar", width = 0.6, color = "white") +
+    geom_jitter(aes(fill=patient), size=3, height = 0, width=0.25, shape=21) +
+    scale_fill_manual(values=c(mycol, pat_col), breaks=names(pat_col)) +
+    guides(fill=guide_legend(ncol=2, override.aes = list(shape = 21))) +
+    scale_y_continuous(limits = c(0,1), breaks=seq(0,1,0.2), minor_breaks = NULL) +
+   labs(title="Deleterious BLCA Driver SNVs Capture", x="", y="Capture Proportion", fill="Patient")
+ggsave(paste0(wd_driv, "DelDriver_CAC3_byHighLowType_noX_Box.pdf"), width=5, height=4)
+ggsave(paste0(figs_driv, "DelDriver_CAC3_byHighLowType_noX_Box.pdf"), width=5, height=4)
+```
+
+comut for deleterious drivers in InterestingBLCA genes (w/ TPbed annotated)
+```{r}
+#having TP & WGS together on same comut
+del_driver2 <- collapsed_power_TITAN %>% 
+  #filter(InterestingBLCAGene=="Yes", !Gene.refGene %in% NOI, pathogenic_3m=="Deleterious", cfSample !="19-001_1095_ULP-WGS", in_TPBED=="Yes") %>%
+  #filter(InterestingBLCAGeneSource%in%c("Hartwig", "TCGA"), pathogenic_3m=="Deleterious", cfSample !="19-001_1095_ULP-WGS", in_TPBED=="Yes") %>%
+  filter(IsDriverBLCAupdated=="Yes", pathogenic_3m_updated=="Deleterious", cfSample !="19-001_1095_ULP-WGS") %>%
+  mutate(type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         patient = substr(cfSample, 1, 6)) 
+GOI <- del_driver2 %>% pull(Gene.refGene) %>% unique()
+cfSamples <- unique(del_driver2$cfSample)
+
+NOI <- del_driver2 %>% 
+  group_by(Gene.refGene) %>%
+  summarise(n=n()) %>%
+  filter(n==1) %>% pull(Gene.refGene)
+NOI <- c(NOI, "MACF1", "ZFP36L1", "TAF15", "RXRA", "GNA13", "RXRA", "TP63", "PREX2", "MYH9", "HSPG2", "CHD2", "BIRC6", "ARHGEF10")
+GOI <- setdiff(GOI, NOI)
+
+comut <- data.frame()
+for(gene in GOI){
+  for(samp in cfSamples){
+    in_tumor <- ifelse(del_driver2 %>% filter(Gene.refGene==gene, cfSample==samp) %>% nrow() == 0, "no_tumor_mut", "tumor_mut")
+    inTPbed <- ifelse(in_tumor=="tumor_mut", 
+                      del_driver2 %>% filter(Gene.refGene==gene, cfSample==samp) %>% pull(in_TPBED), "no_tumor_mut")
+    clonality <- ifelse(in_tumor=="tumor_mut", 
+                        del_driver2 %>% filter(Gene.refGene==gene, cfSample==samp) %>% pull(cluster_status), "no_tumor_mut")
+    in_cfDNA <- ifelse(del_driver2 %>% filter(Gene.refGene==gene, cfSample==samp, CAC3=="CAC_called_3") %>% nrow() == 0, 
+                       "not_in_cfDNA", 
+                       del_driver2 %>% filter(Gene.refGene==gene, cfSample==samp, CAC3=="CAC_called_3") %>% pull(cluster_status))
+    patient <- substr(samp, 1, 6)
+    type = ifelse(grepl("cfWGS", samp), "WGS", "Targeted")
+    df <- data.frame(Gene = gene, cfSample = samp,patient = patient,type=type, in_tumor = clonality, in_cfDNA = in_cfDNA, in_TPBED = inTPbed)
+    
+    comut <- bind_rows(comut, df)
+  }
+}
+#write.csv(comut, 'Supplementary_Tables/cfDNA/cfDNA_driver_comut.csv', row.names = F)
+
+order_genes <- comut %>% filter(in_tumor!="no_tumor_mut", in_TPBED=="Yes") %>% pull(Gene) %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% rename("Gene"=".") %>% mutate(Gene = as.character(Gene)) %>% pull(Gene)
+order_genes <- c(order_genes, setdiff(unique(comut$Gene), order_genes))
+order_samples_WGS <- comut %>% filter(in_tumor!="no_tumor_mut", type=="WGS") %>% pull(cfSample) %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% rename("cfSample"=".") %>% mutate(cfSample = as.character(cfSample))%>% pull(cfSample)
+
+order_patient <- substr(order_samples_WGS, 1, 6)
+order_patient <- c("19-022", "15-109", "19-037", "16-070", "16-079", "16-097", "18-101", "19-001")
+
+order_samples <- comut %>% filter(patient %in% order_patient) %>% distinct(patient, type, cfSample) %>% mutate(patient = factor(patient, levels=order_patient)) %>% arrange(patient) %>% pull(cfSample)
+other_TP_samples <- comut %>% filter(type=="Targeted", !patient %in% order_patient, in_tumor!="no_tumor_mut") %>% pull(cfSample) %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) %>% rename("cfSample"=".") %>% mutate(cfSample = as.character(cfSample))%>% pull(cfSample)
+order_samples <- append(order_samples, other_TP_samples)
+
+a <- length(GOI) +1
+b <- comut %>%
+  mutate(Gene = factor(Gene, levels=rev(order_genes)), 
+         cfSample = factor(cfSample, levels=order_samples)) %>% filter(Gene=="BRCA2") %>% arrange(cfSample) %>% pull(patient)
+
+comut_order <- comut %>%
+  mutate(Gene = factor(Gene, levels=rev(order_genes)), 
+         cfSample = factor(cfSample, levels=order_samples))
+
+
+ggplot() +
+  
+  geom_tile(data = comut_order %>% filter(in_TPBED!="No"), aes(x=cfSample, y=Gene, color=in_tumor, fill=in_cfDNA),width=0.5, height=0.5, linewidth =1.5) +
+  geom_tile(data = comut_order %>% filter(in_TPBED=="No"), aes(x=cfSample, y=Gene), color="snow2", fill="white", width=0.4, height=0.4,linewidth=1) +
+  
+  geom_vline(xintercept = seq(2,16,2)+0.5, color="snow3", linetype="dashed") +
+  scale_color_manual(values=c("no_tumor_mut"="snow2", mycol), breaks = c("Founder", "Shared","Private", "no_tumor_mut"), labels=c("Founder", "Shared","Private", "No tumor mut")) +
+  scale_fill_manual(values=c("not_in_cfDNA"="snow2", mycol), breaks = c("Founder", "Shared","Private", "not_in_cfDNA"), labels=c("Founder", "Shared","Private", "Not in cfDNA")) +
+  
+  my_classic +
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1)) +
+  scale_x_discrete(labels = b) +
+  geom_tile(data = comut_order, aes(x=cfSample, fill=type, color=type, y=a), width=0.5, height=0.5, inherit.aes = F, linewidth = 1.5) +
+  labs(title="Deleterious BLCA Driver Mutation Capture in cfWGS", fill="In cfDNA", color="Tumor Clonality", x="Patient")
+ggsave(paste0(wd_driv, "Comut_DelDriver_over1.pdf"), width=7, height=6)
+ggsave(paste0(figs_driv, "Comut_DelDriver_over1.pdf"), width=7, height=6)
+```
+
+
+### CAPTURE EACH TUMOR ### 
+
+import/set up allpower df
+-use allpower, since we're looking at private mutations in each tumor, we don't want to use the collapsed mutations, but retain the call for each tumor
+```{r}
+#original: per mutation, per tumor power calculation
+allpower <- read_csv("cfDNA/With_TopOff/cfDNAPower_BEDfiltered_TumorMuts_withClonality.csv", show_col_types = F) 
+
+allpower <- allpower %>%
+  mutate(in_TPBED = case_when(type == "cfWGS"~"Yes",
+                              id %in% inBED~"Yes", .default = "No"))
+```
+
+are there private mutations to call in each tumor?
+```{r}
+#any mutation
+df <- allpower %>% filter(cluster_status=="Private") %>%
+  filter(cfSample!="19-001_1095_ULP-WGS") %>% #remove 19-001 serum sample, only keep 19-001 plasma sample
+  select(cfSample, sample, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(hasPrivate = ifelse(CAC_called_3>0, "Yes", "No"), 
+         type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         type = factor(type, levels=c("WGS", "Targeted")),
+         patient = substr(sample, 1, 6)) %>%
+  rowwise %>% filter(grepl(patient, cfSample)) %>% ungroup() %>%
+  left_join(ann_WES)
+
+#subset TP to only mutations in TP region
+df2 <- allpower %>% filter(cluster_status=="Private", in_TPBED =="Yes") %>%
+  filter(cfSample!="19-001_1095_ULP-WGS") %>% #remove 19-001 serum sample, only keep 19-001 plasma sample
+  select(cfSample, sample, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(hasPrivate = ifelse(CAC_called_3>0, "Yes", "No"), 
+         type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         type = factor(type, levels=c("WGS", "Targeted")),
+         patient = substr(sample, 1, 6)) %>%
+  rowwise %>% filter(grepl(patient, cfSample)) %>% ungroup() %>%
+  left_join(ann_WES)
+
+#for cfWGS, 35/35 tumors are found
+df %>% filter(type=="WGS")
+
+#for cfTP, there are 69 tumors possible -> they all have some mutations, but only 42 have mutations in TP region. 18/42 are captured in cfDNA
+df %>% filter(type =="Targeted") %>%
+  mutate(total_mut = CAC_called_3 + CAC_under_3) %>%
+  arrange(total_mut) 
+df2 %>% filter(type =="Targeted") %>%
+  mutate(total_mut = CAC_called_3 + CAC_under_3) %>%
+  arrange(total_mut) %>% 
+  filter(total_mut>0) %>%
+  filter(hasPrivate=="Yes")
+```
+
+
+per tumor basis
+```{r}
+my_classic <- theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black"))
+
+#per tumor sample, are private mutations called?
+callEach <- allpower %>% filter(cluster_status=="Private", in_TPBED=="Yes") %>%
+  filter(cfSample!="19-001_1095_ULP-WGS") %>% #remove 19-001 serum sample, only keep 19-001 plasma sample
+  select(cfSample, sample, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(hasPrivate = ifelse(CAC_called_3>0, "Yes", "No"), 
+         no_Private = case_when(CAC_called_3<6~as.factor(CAC_called_3), 
+                                between(CAC_called_3, 6, 10)~"6-10", 
+                                between(CAC_called_3, 11, 20)~"11-20",
+                                between(CAC_called_3, 21, 30)~"21-30",
+                                between(CAC_called_3, 31, 50)~"31-50",
+                                between(CAC_called_3, 51, 100)~"51-100",
+                                between(CAC_called_3, 101, 200)~"101-200",
+                                between(CAC_called_3,201 , 500)~"201-500",
+                                CAC_called_3>500~"501+"),
+         type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         patient = substr(sample, 1, 6)) %>%
+  rowwise %>% filter(grepl(patient, cfSample)) %>% ungroup() %>%
+  left_join(ann_WES) %>%
+  mutate(no_Private = factor(no_Private, levels=c(as.character(0:5), "6-10", "11-20", "21-30", "31-50", "51-100", "101-200", "201-500", "501+")), 
+         type = factor(type, levels=c("WGS", "Targeted"))) %>% 
+  mutate(total_mut = CAC_called_3 + CAC_under_3) %>%
+  filter(total_mut>0)
+#write.csv(callEach, 'Figure7/source_data/7C_callEachTumor.csv', row.names = F)
+
+callEach %>%
+  ggplot(aes(x=type, fill=no_Private)) +
+    geom_bar(stat="count", position="fill") +
+    scale_fill_manual(values=c("snow2",magma(14)[3:14])) +
+    my_classic +
+    labs(title="Capture Per Tumor by Private Mutations", x="", y="% of tumors captured", fill="# mutations", subtitle = "captured: 1+ private mutation CAC3")
+ggsave(paste0(wd, "PerTumorCapture_Detailed_fill.pdf"), width=3, height=4)
+ggsave(paste0(figs, "PerTumorCapture_Detailed_fill.pdf"), width=3, height=4)
+```
+
+
+
+false positive for per tumor basis
+```{r}
+#calculate # of false positive private mutations expected per tumor from ctDNA depth & sequencing error rate
+#make df with min # of mutations needed per sample to "capture" > false positives
+min_capture <- allpower %>% filter(cluster_status=="Private") %>%
+  mutate(false_pos = 1- (dbinom(0,Total_reads_ctDNA, 0.001)+dbinom(1,Total_reads_ctDNA, 0.001)+dbinom(2,Total_reads_ctDNA, 0.001))) %>%
+  group_by(sample, cfSample) %>%
+  summarise(sum_false_pos = sum(false_pos), 
+            n_muts = n()) %>% 
+  mutate(min_for_capture_001 = ceiling(sum_false_pos)) 
+
+
+#scatterplot of expected false pos vs CAC3
+## error = 0.001
+obs_exp <- allpower %>% filter(cluster_status=="Private") %>%
+  select(cfSample, sample, CAC3) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = CAC3, values_from = Freq) %>%
+  mutate(type = ifelse(grepl("cfWGS", cfSample), "WGS", "Targeted"), 
+         patient = substr(sample, 1, 6)) %>%
+  rowwise %>% filter(grepl(patient, cfSample)) %>% ungroup() %>%
+  left_join(min_capture) %>%
+  left_join(ann_WES) %>%
+  mutate(above = ifelse(CAC_called_3>sum_false_pos, "yes", "no"))
+#write.csv(obs_exp, 'Supplementary_Figure16_cfDNA/source_data/S16B_Observed_Expected_PrivateCapture.csv', row.names = F)
+
+obs_exp %>% 
+  ggplot(aes(x=sum_false_pos, y=CAC_called_3+0.1)) +
+    geom_jitter(aes(fill=above, shape=type), size=4, alpha=0.8, width=0.1, height=0.1) +
+    scale_shape_manual(values=c(21,24)) +
+    scale_fill_manual(values=c(pat_col, "yes"="forestgreen", "no"="snow3")) +
+    guides(fill=guide_legend(ncol=1, override.aes = list(shape = 21))) +
+    my_classic + border() +
+    scale_x_continuous(breaks=seq(0,10,2)) +
+    scale_y_continuous(transform = "log10", breaks=c(0.1,1,10,100,1000), labels = c(0,1,10,100,1000)) +
+    geom_line(data = data.frame(x = seq(0.1, 10, length.out = 100)) |> transform(y = x),
+            aes(x = x, y = y), color = "black", linetype = "dashed") +
+    labs(x="Expected False Positives", y=" Called Mutations", fill="Observed > Expected", shape="cfDNA Seq Type", title="Capture over Expected False Positives", subtitle = "using error = 0.001")
+ggsave(paste0(wd, "PerTumor_FalsePositivesvsCAC3_001.pdf"), width=5, height=4)
+ggsave(paste0(supp, "PerTumor_FalsePositivesvsCAC3_001.pdf"), width=5.5, height=4)
+```
+
