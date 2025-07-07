@@ -1,0 +1,740 @@
+---
+title: "Mut_Signatures"
+output: html_document
+date: "2024-10-01"
+---
+
+```{r include=FALSE}
+library(pals)
+library(cowplot)
+library(rstatix)
+library(ggpubr)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(glmmTMB)
+library(brms)
+library(emmeans)
+library(ggbeeswarm)
+library(tidyverse)
+```
+
+set wd
+```{r}
+wd <- 'FANC_updated/UWTAN/'
+figs <- 'Figure4/v4 Panels/UWTAN/'
+```
+
+
+import patient info
+```{r}
+sig_etiology <- read_csv('Supplementary_Tables/genomic_results/mutation_signatures/COSMICv3.4_SBS.csv', show_col_types = F)
+patient_chemo <- read_csv("Master_files/UW_Patient_Chemo.csv", show_col_types = F)
+sample_info <- read_csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv', show_col_types = F)
+chemo_dosage <- read.csv('Supplementary_Tables/clinical_data/Chemo_dosage.csv')
+
+clinical <- read.csv('Supplementary_Tables/clinical_data/all_clinical_data_updated.csv')
+```
+
+set up plotting
+```{r}
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD_focal"="#ACD7A0","UCSD_mixed"="#ACD7A0", "UC_UCSD"="#815CA6", "UCSD"="#43823D","SQ"="#43823D" ,"SARC"="bisque3")
+type_col <- c("Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220")
+type_col2 <- c("Founder"="#FFDF82","Shared"= "#8894C3","Private"= "#E87D85")
+FSP_col <- c("Founder"= "#FEC216", "Shared"= "#3B4F8F", "Private"= "#CE414B") 
+
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+sig_etiology <-sig_etiology %>%
+  mutate(et_class_col = case_match(et_class,
+                                    "Clock"~"#93D4FF", "APOBEC"~"#A10300", "DNA_repair_def"~"#005300","Tobacco"~"#FE8F42", "UV"~"#FFD300", "Unknown"~"snow3", "Polymerase"~"turquoise4", "Chemo"~"#783FC1", "ROS"~"#DC5E93", "Carcinogen_exp"~"#886C00"))  %>%
+  mutate(et_color = case_match(etiology, 
+                               "APOBEC"~"#CC7A88", "Aristolochic-acid"~"tan", "Aflatoxin"~"tan3", "Azathioprine"~ "tan4", "Haloalkane"~"khaki3", "Colibactin"~"khaki4", "Duocarmycin"~"bisque2", "Melphalan"~"bisque3",
+                               "Temozolomide"~"plum", "Chemotherapy"~"lavender", "Platinum"~"#783FC1", "Thiopurine-chemo"~"#766C95", "Clock-like"~"paleturquoise", 
+                               "HR-def_BRCA-mut"~"#005300", "MMR-def"~"#637939", "POLE-mut_MMR-def"~"#B5CF6B", "POLD1-mut_MMR-def"~"#CEDB9C","BER-def"~"#02AD24", "AID"~"#C8FF00",
+                               "Polymerase-n"~"seagreen", "POLE-mut"~"turquoise4", "ROS"~"#DC5E93", "Tobacco"~"#FE8F42", "UV-light"~"#FFD300", "Unknown"~"snow3"))
+
+et_class_cols <- distinct(sig_etiology %>% select(et_class, et_class_col))$et_class_col %>% setNames(distinct(sig_etiology %>% select(et_class, et_class_col))$et_class)
+et_cols <- distinct(sig_etiology %>% select(etiology, et_color))$et_color %>% setNames(distinct(sig_etiology %>% select(etiology, et_color))$etiology)
+```
+
+import cluster types
+```{r}
+cluster_types <- read.csv('Supplementary_Tables/genomic_results/SNVs/sample_cluster_CP.csv') %>%
+   mutate(cluster = paste0(patient, "_", cluster_id)) %>%
+   rename(n_muts_input = cluster_mut_no, cluster_status = cluster_type)
+```
+
+
+import Sigprofiler results from raw
+-SigProfiler signature matrix: fh/fast/ha_g/projects/Ha_Hsieh_BladderCancer/analysis/mutational_signatures/SigProfiler/data/SLS_run/Sig_DBs/Assignment_Solution_Signatures_UVart_odd.txt
+-Clusters: July2024 updated TITAN + Sept2024 including indels + TITAN updates Dec 2024 + removing 19-004I/J weird sample
+-Without 18-101, 17-047, 18-120, 19-044 primaries
+-Pushpa ran SigProfiler
+```{r}
+sbs <- data.frame()
+pats <- c("15-108" ,"15-109", "16-097" ,"17-030" ,"17-047", "17-071",  "18-065" ,"18-101", "18-120","19-001",  "19-022", "19-037" ,"19-044", "16-070", "16-079", "17-020" ,"17-026" ,"18-016", "19-004", "19-007") %>% sort()
+for(pat in pats){
+  fl <- paste0("data/",pat,"/SigProfilerAnalysis_v3.2/SBS/perCluster/Assignment_Solution/Activities/Assignment_Solution_Activities.txt")
+  df <- read_delim(fl, delim="\t", show_col_types = F) %>%
+    mutate(patient = pat)
+  sbs <- rbind(sbs, df)
+}
+
+sbs <- sbs %>%
+  pivot_longer(cols=starts_with("SBS"), names_to = "sig", values_to = "n_muts_sig") %>%
+  rename("cluster"="Samples") %>%
+  left_join(sig_etiology) %>%
+  left_join(sample_info %>% distinct(patient, hist_patient)) %>%
+  left_join(patient_chemo %>% select(Patient,Cisplatin), by=c("patient"="Patient")) %>%
+  left_join(cluster_types %>% distinct(cluster, n_muts_input, cluster_status)) %>%
+  rename(Histology=hist_patient) %>%
+  mutate(FANC_hist = case_when(Histology %in% c("UC", "UCSD", "UCSD_focal")~"UC_UCSD", 
+                               Histology == "PUC"~"PUC", 
+                               .default = Histology))
+
+#get n_muts from sigprofiler output - use to calculate percent
+n_df <- sbs %>%
+  group_by(cluster) %>%
+  summarise(n_muts_output = sum(n_muts_sig)) %>% ungroup() %>%
+  left_join(cluster_types %>% select(cluster, n_muts_input, cluster_status)) %>% distinct()
+
+sbs <- sbs %>%
+  left_join(n_df %>% distinct(cluster, n_muts_output)) %>%
+  filter(!is.na(cluster_status))
+```
+write out Sigprofiler results
+```{r}
+supp <- 'Supplementary_Tables/genomic_results/mutation_signatures/'
+write.csv(sbs, paste0(wd, "all_sbs_byClone.csv"), row.names = F)
+write.csv(sbs, paste0(supp, "all_sbs_byClone.csv"), row.names = F)
+```
+
+import combined results
+```{r}
+sbs <- read.csv('Supplementary_Tables/genomic_results/mutation_signatures/all_sbs_byClone.csv')
+```
+
+graph SigProfiler results (overall)
+```{r}
+order1 <- sbs %>% 
+  mutate(cluster_status=factor(cluster_status, levels=c("Founder","Shared","Private")),
+                         Histology = factor(Histology, levels=c("UC",  "UCSD", "PUC", "NE", "SARC"))) %>% 
+  arrange(Histology, Cisplatin, patient, cluster_status) %>% 
+  pull(cluster) %>% unique() 
+order3 <- sbs %>% 
+  mutate(cluster_status=factor(cluster_status, levels=c("Founder","Shared","Private")),
+                         Histology = factor(Histology, levels=c("UC",  "UCSD", "PUC", "NE", "SARC"))) %>% 
+  arrange(Histology, Cisplatin, patient, cluster_status) %>% 
+  pull(patient) %>% unique() 
+bars <- sbs %>% select(cluster, patient) %>% distinct() %>% group_by(patient) %>% summarise(n=n()) %>% mutate(patient =factor(patient, levels=order3)) %>% arrange(patient) %>% mutate(sum = cumsum(n)) %>% pull(sum)
+order2 <- sig_etiology %>% arrange(et_class) %>% pull(etiology) %>% unique()
+
+p1 <- sbs %>%
+  mutate(cluster = factor(cluster, levels=order1), 
+         etiology= factor(etiology, levels=order2)) %>%
+  ggplot(aes(x=cluster, y=n_muts_sig, fill=etiology)) +
+    geom_bar(stat="identity", position = "fill") +
+    scale_fill_manual(values=c(et_cols, hist_col, c("N"="snow2", "Y"="red"), type_col), breaks=names(et_cols)[order(match(names(et_cols), order2))]) +
+    geom_tile(data = sbs %>% distinct(cluster, Histology) %>% mutate(cluster=factor(cluster, levels=order1)), 
+                aes(x = cluster, y=1.1, fill=Histology), width=0.85, height=.05, inherit.aes = F, show.legend = F) +
+    geom_tile(data = sbs %>% distinct(cluster, Cisplatin) %>% mutate(cluster=factor(cluster, levels=order1)), 
+                aes(x = cluster, y=1.04, fill=Cisplatin), width=0.85, height=.05, inherit.aes = F, show.legend = F) +
+    geom_vline(xintercept = bars+0.5)+
+    scale_y_continuous(breaks=c(0,0.5,1), name="Signature Proportion") +
+    scale_x_discrete(labels=NULL, name=NULL) +
+    coord_cartesian(ylim=c(0.04,1.08)) +
+    theme(legend.position = "none", axis.ticks.x = element_blank(), plot.margin = margin(0, 5, 0, 5))
+p1
+
+p2 <- sbs %>%
+  mutate(cluster = factor(cluster, levels=order1), 
+         etiology= factor(etiology, levels=order2)) %>%
+  distinct(cluster, n_muts_output, cluster_status) %>%
+  ggplot(aes(x=cluster, y=n_muts_output, fill=cluster_status)) +
+    geom_bar(stat="identity") +
+    geom_vline(xintercept = bars+0.5)+
+    scale_fill_manual(values=type_col) +
+    scale_y_continuous(transform = "log10", breaks=c(1,10,100,1000,10000, 100000), labels=c("1","10","100","1,000","10,000", "100,000"), name="Muts per cluster") +
+    scale_x_discrete(labels=NULL, name=NULL) +
+    theme(legend.position = "none", axis.ticks.x = element_blank(), plot.margin = margin(0, 5, 0, 5))
+
+p2 / p1 +plot_layout(heights = c(0.2,1))
+ggsave(paste0(wd, "SBS_MutSig_byCluster_withbar.pdf"), width=18, height=6)
+ggsave(paste0(figs, "SBS_MutSig_byCluster_withbar.pdf"), width=18, height=6)
+```
+
+### CLONALITY OF DIFFERENT SIGNATURES ###
+
+set up dfs
+```{r}
+cis_df_clonality <- sbs %>%
+  filter(etiology=="Platinum", Cisplatin=="Y", n_muts_output>50) %>%
+  group_by(cluster) %>%
+  mutate(muts_in_et = sum(n_muts_sig)) %>%
+  select(-n_muts_sig, -sig) %>%
+  distinct() %>%
+  mutate(percent = muts_in_et/n_muts_output,
+         muts_not_et = n_muts_output - muts_in_et,
+         cluster_status=factor(cluster_status, levels=c("Founder", "Shared", "Private"))) %>%
+  ungroup()
+
+clock_df <- sbs %>%
+  filter(etiology=="Clock-like", n_muts_output>50) %>%
+  group_by(cluster) %>%
+  mutate(muts_in_et = sum(n_muts_sig)) %>%
+  select(-n_muts_sig, -sig) %>%
+  distinct() %>%
+  mutate(percent = muts_in_et/n_muts_output,
+         muts_not_et = n_muts_output - muts_in_et,
+         cluster_status=factor(cluster_status, levels=c("Founder", "Shared", "Private"))) %>%
+  ungroup()
+
+apo_df <- sbs %>%
+  filter(etiology=="APOBEC", n_muts_output>50) %>%
+  group_by(cluster) %>%
+  mutate(muts_in_et = sum(n_muts_sig)) %>%
+  select(-n_muts_sig, -sig) %>%
+  distinct() %>% 
+  mutate(percent = muts_in_et/n_muts_output,
+         muts_not_et = n_muts_output - muts_in_et,
+         cluster_status=factor(cluster_status, levels=c("Founder", "Shared", "Private")), 
+         Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>% ungroup()
+
+dna_df <- sbs %>%
+  filter(et_class=="DNA_repair_def", n_muts_output>50) %>%
+  group_by(cluster) %>%
+  mutate(muts_in_et = sum(n_muts_sig)) %>%
+  select(cluster, et_class, Histology, cluster_status, n_muts_output, muts_in_et, patient, FANC_hist) %>%
+  distinct() %>%
+  mutate(percent = muts_in_et/n_muts_output,
+         muts_not_et = n_muts_output - muts_in_et,
+         cluster_status=factor(cluster_status, levels=c("Founder", "Shared", "Private"))) %>%
+  ungroup()
+```
+
+combine shared/private to one value per patient - MWU (paired)
+```{r}
+#MWU, each patient being one point in shared/private
+apo_df2 <- apo_df %>%
+  group_by(patient, cluster_status) %>%
+  summarise(muts_in_et = sum(muts_in_et), 
+            n_muts_output = sum(n_muts_output), 
+            FANC_hist = unique(FANC_hist), .groups = "drop") %>%
+  mutate(percent = muts_in_et/n_muts_output) %>%
+  arrange(patient)
+stat.test <- apo_df2 %>% #unpaired FP p=0.049, SP p=0.172
+  wilcox_test(percent~cluster_status) %>%
+  add_xy_position(step.increase = 0.25)
+apo_df2 %>% #paired FP p=0.00451
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Shared", patient!="18-065") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+apo_df2 %>% #paired SP p=0.0138
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Founder", patient!="18-101") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+apo_df2 %>% #paired FS p=0.17
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Private", !patient %in% c("18-065", "18-101")) %>%
+  wilcox_test(percent~cluster_status, paired = T)
+apo_df2 %>%
+  ggplot(aes(x=cluster_status, y=percent)) +
+    geom_violin(aes(fill=cluster_status), show.legend = F) +
+    geom_jitter(height=0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.1, outlier.shape = NA) +
+    stat_pvalue_manual(stat.test, hide.ns = F, label="p",tip.length = 0) +
+    scale_fill_manual(values=type_col2) +
+    border(color="black") +
+    #scale_y_continuous(breaks=seq(0,1,0.25), limits=c(0,1)) +
+    labs(x="", y="Proportion Platinum Signature", color="Patient Histology", caption= "wilcox unadj pval")
+ggsave(paste0(wd,"Overall_MutSigs/APOBEC_clonality_perPatient.pdf"), width=4, height=4)
+ggsave(paste0(figs,"Overall_MutSigs/APOBEC_clonality_perPatient.pdf"), width=3, height=3.5)
+
+#MWU, each patient being one point in shared/private
+clock_df2 <- clock_df %>%
+  group_by(patient, cluster_status) %>%
+  summarise(muts_in_et = sum(muts_in_et), 
+            n_muts_output = sum(n_muts_output), 
+            FANC_hist = unique(FANC_hist), .groups = "drop") %>%
+  mutate(percent = muts_in_et/n_muts_output) %>%
+  arrange(patient)
+stat.test <- clock_df2 %>% #unpaired FS p=0.023; FP p=0.007
+  wilcox_test(percent~cluster_status) %>%
+  add_xy_position(step.increase = 0.25)
+clock_df2 %>% #paired FP p=0.0108
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Shared") %>% #group_by(patient) %>% summarise(n=n()) %>% filter(n==1)
+  filter(patient !="18-065") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+clock_df2 %>% #paired SP p=0.738
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Founder", patient!="18-101") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+clock_df2 %>% #paired FS p=0.00658
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Private", !patient %in% c("18-065", "18-101")) %>%
+  wilcox_test(percent~cluster_status, paired = T)
+clock_df2 %>%
+  ggplot(aes(x=cluster_status, y=percent)) +
+    geom_violin(aes(fill=cluster_status), show.legend = F) +
+    geom_jitter(height=0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.1, outlier.shape = NA) +
+    stat_pvalue_manual(stat.test, hide.ns = F, label="p",tip.length = 0) +
+    scale_fill_manual(values=type_col2) +
+    border(color="black") +
+    #scale_y_continuous(breaks=seq(0,1,0.25), limits=c(0,1)) +
+    labs(x="", y="Proportion Platinum Signature", color="Patient Histology", caption= "wilcox unadj pval")
+ggsave(paste0(wd,"Overall_MutSigs/Clock_clonality_perPatient.pdf"), width=4, height=4)
+ggsave(paste0(figs,"Overall_MutSigs/Clock_clonality_perPatient.pdf"), width=3, height=3.5)
+
+#MWU, each patient being one point in shared/private
+cis_df_clonality2 <- cis_df_clonality %>%
+  group_by(patient, cluster_status) %>%
+  summarise(muts_in_et = sum(muts_in_et), 
+            n_muts_output = sum(n_muts_output), 
+            FANC_hist = unique(FANC_hist), .groups = "drop") %>%
+  mutate(percent = muts_in_et/n_muts_output) %>%
+  arrange(patient)
+stat.test <- cis_df_clonality2 %>% #unpaired FS p=0.004000; FP p=0.000921
+  wilcox_test(percent~cluster_status) %>%
+  add_xy_position(step.increase = 0.05)
+cis_df_clonality2 %>% #paired FP p=0.0143
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Shared") %>% #group_by(patient) %>% summarise(n=n()) %>% filter(n==1)
+  filter(patient !="18-065") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+cis_df_clonality2 %>% #paired SP p=0.0423
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Founder", patient!="18-101") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+cis_df_clonality2 %>% #paired FS p=0.036
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Private", !patient %in% c("18-065", "18-101")) %>%
+  wilcox_test(percent~cluster_status, paired = T)
+cis_df_clonality2 %>%
+  ggplot(aes(x=cluster_status, y=percent)) +
+    geom_violin(aes(fill=cluster_status), show.legend = F) +
+    geom_jitter(height=0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.1, outlier.shape = NA) +
+    stat_pvalue_manual(stat.test, hide.ns = F, label="p",tip.length = 0) +
+    scale_fill_manual(values=type_col2) +
+    border(color="black") +
+    #scale_y_continuous(breaks=seq(0,1,0.25), limits=c(0,1)) +
+    labs(x="", y="Proportion Platinum Signature", color="Patient Histology", caption= "wilcox unadj pval")
+ggsave(paste0(wd,"Overall_MutSigs/Cisplatin_clonality_perPatient.pdf"), width=4, height=4)
+ggsave(paste0(figs,"Overall_MutSigs/Cisplatin_clonality_perPatient.pdf"), width=3, height=3.5)
+
+#MWU, each patient being one point in shared/private
+dna_df2 <- dna_df %>%
+  group_by(patient, cluster_status) %>%
+  summarise(muts_in_et = sum(muts_in_et), 
+            n_muts_output = sum(n_muts_output), 
+            FANC_hist = unique(FANC_hist), .groups = "drop") %>%
+  mutate(percent = muts_in_et/n_muts_output) %>%
+  arrange(patient)
+stat.test <- dna_df2 %>% #unpaired FS p=0.101; FP p=0.061
+  wilcox_test(percent~cluster_status) %>%
+  add_xy_position(step.increase = 0.05)
+dna_df2 %>% #paired FP p=0.0191
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Shared") %>% #group_by(patient) %>% summarise(n=n()) %>% filter(n==1)
+  filter(patient !="18-065") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+dna_df2 %>% #paired SP p=0.142
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Founder", patient!="18-101") %>%
+  wilcox_test(percent~cluster_status, paired = T)
+dna_df2 %>% #paired FS p=0.126
+  mutate(cluster_status = as.character(cluster_status)) %>%
+  filter(cluster_status!="Private", !patient %in% c("18-065", "18-101")) %>%
+  wilcox_test(percent~cluster_status, paired = T)
+dna_df2 %>%
+  ggplot(aes(x=cluster_status, y=percent)) +
+    geom_violin(aes(fill=cluster_status), show.legend = F) +
+    geom_jitter(height=0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.1, outlier.shape = NA) +
+    stat_pvalue_manual(stat.test, hide.ns = F, label="p",tip.length = 0) +
+    scale_fill_manual(values=type_col2) +
+    border(color="black") +
+    #scale_y_continuous(breaks=seq(0,1,0.25), limits=c(0,1)) +
+    labs(x="", y="Proportion Platinum Signature", color="Patient Histology", caption= "wilcox unadj pval")
+ggsave(paste0(wd,"Overall_MutSigs/DNArepairDef_clonality_perPatient.pdf"), width=4, height=4)
+ggsave(paste0(figs,"Overall_MutSigs/DNArepairDef_clonality_perPatient.pdf"), width=3, height=3.5)
+
+
+df <- rbind(dna_df2 %>% mutate(etiology = "DNA_repair_def"), cis_df_clonality2%>% mutate(etiology = "Platinum")) %>% rbind(apo_df2%>% mutate(etiology = "APOBEC")) %>% rbind(clock_df2%>% mutate(etiology = "Clock-like")) %>%
+  mutate(etiology = factor(etiology, levels=c("APOBEC", "Clock-like", "Platinum", "DNA_repair_def")))
+write.csv(df, 'Figure4/source_data/4A_sig_clonality.csv', row.names = F)
+
+stat.test <- df %>%
+  group_by(etiology) %>%
+  wilcox_test(percent~cluster_status) %>%
+  add_xy_position(step.increase = 0.02) %>%
+  add_significance("p")
+df %>%
+  ggplot(aes(x=cluster_status, y=percent)) +
+    geom_violin(aes(fill=cluster_status), show.legend = F, color="black") +
+    geom_jitter(height=0, width=0.2, size=2, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    geom_boxplot(fill="white", alpha=0.7, width=0.1, outlier.shape = NA, color="white") +
+    stat_summary(fun = median, geom = "crossbar", width = 0.5, color = "white") +
+    #stat_pvalue_manual(stat.test, hide.ns = F, tip.length = 0, label = "p") +
+    scale_fill_manual(values=FSP_col) +
+    scale_color_manual(values=hist_col) +
+    border(color="black") +
+    facet_grid(cols=vars(etiology)) +
+    scale_y_continuous(breaks=seq(0,1,0.25), limits = c(0,1.2)) +
+    labs(x=NULL, y="Signature Proportion", caption = "showing t-test unadj p")
+ggsave(paste0(wd,"Overall_MutSigs/CombinedEtiology_clonality.pdf"), width=8, height=3.5)
+ggsave(paste0(figs,"Overall_MutSigs/CombinedEtiology_clonality_perPatient.pdf"), width=8, height=3.5)
+```
+
+### SIGNATURE BY HISTOLOGY ###
+
+Histology per patient (proportion of mutsig)
+```{r}
+#total output muts per patient
+total_df <- sbs %>% 
+  distinct(cluster, patient, n_muts_output) %>%
+  group_by(patient) %>%
+  summarise(n_muts_output = sum(n_muts_output))
+
+##APOBEC
+df <- sbs %>%
+  filter(etiology=="APOBEC", n_muts_output>50) %>%
+  group_by(patient) %>%
+  summarise(muts_in_et = sum(n_muts_sig), 
+            Histology = unique(Histology)) %>%
+  left_join(total_df) %>%
+  mutate(percent = muts_in_et/n_muts_output) %>% ungroup()
+write.csv(df, 'Supplementary_Figure9-10_MutSigs/source_data/S9C_APOBEC_byHist.csv', row.names = F)
+
+stat.test <- df %>%
+  filter(Histology!="SARC") %>%
+  mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE"))) %>%
+  wilcox_test(percent~Histology) %>%
+  add_xy_position(step.increase = 0.03)
+df %>%
+  mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  ggplot(aes(x=Histology, y=percent)) +
+    geom_boxplot(aes(fill=Histology), outlier.shape = NA, show.legend = F) +
+    geom_jitter(height = 0, width=0.25, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    #stat_pvalue_manual(stat.test, label="p", tip.length = 0, hide.ns = F) +
+    scale_y_continuous(breaks=seq(0,1,0.25), limits = c(0,1)) +
+    border() +
+    scale_fill_manual(values=hist_col) +
+    labs(x=NULL, y="Proportion APOBEC Signature", caption="t-test unadj p shown; wilcox ns")
+ggsave(paste0(wd,"Overall_MutSigs/APOBEC_byHist_boxplot.pdf"), width=4, height=3.5)
+ggsave(paste0(figs,"Overall_MutSigs/APOBEC_byHist_boxplot_nostats.pdf"),  width=3.5, height=3.5)
+
+##Clock
+df <- sbs %>%
+  filter(etiology=="Clock-like", n_muts_output>50) %>%
+  group_by(patient) %>%
+  summarise(muts_in_et = sum(n_muts_sig), 
+            Histology = unique(Histology)) %>%
+  left_join(total_df) %>%
+  mutate(percent = muts_in_et/n_muts_output) %>% ungroup()
+write.csv(df, 'Supplementary_Figure9-10_MutSigs/source_data/S9B_Clock_byHist.csv', row.names = F)
+
+stat.test <- df %>%
+  filter(Histology!="SARC") %>%
+  mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE"))) %>%
+  t_test(percent~Histology) %>%
+  add_xy_position(step.increase = 0.03)
+df %>%
+  mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  ggplot(aes(x=Histology, y=percent)) +
+    geom_boxplot(aes(fill=Histology), outlier.shape = NA, show.legend = F) +
+    geom_jitter(height = 0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    stat_pvalue_manual(stat.test, label="p", tip.length = 0, hide.ns = "p") +
+    scale_y_continuous(breaks=seq(0,1,0.25), limits = c(0,1)) +
+    border() +
+    scale_fill_manual(values=hist_col) +
+    labs(x=NULL, y="Proportion Clock Signature", caption="t-test ns; wilcox ns")
+ggsave(paste0(wd,"Overall_MutSigs/Clock_byHist_boxplot.pdf"), width=4, height=3.5)
+ggsave(paste0(figs,"Overall_MutSigs/Clock_byHist_boxplot.pdf"),  width=4, height=3.5)
+```
+
+Histology per patient (absolute number of mutsig)
+```{r}
+#total output muts per patient
+total_df <- sbs %>% 
+  distinct(cluster, patient, n_muts_output) %>%
+  group_by(patient) %>%
+  summarise(n_muts_output = sum(n_muts_output))
+
+#normalize by exome vs genome coverage
+WES_df <- data.frame(patient = sort(unique(sample_info$patient)), 
+                     type = c(rep("WES", 7), rep("WGS", 13)))
+exome_Mb <- 96 #from https://www.selectscience.net/product/nimblegen-seqcap-ez-library-kits (NimbleGen SeqCap EZ Exome V3+UTR)
+genome_Mb <- 3049316098/1000000 #size of hg38 genome https://www.ncbi.nlm.nih.gov/grc/human/data?asm=GRCh38
+
+##APOBEC
+# df <- sbs %>%
+#   filter(etiology=="APOBEC", n_muts_output>50) %>%
+#   group_by(patient) %>%
+#   summarise(muts_in_et = sum(n_muts_sig), 
+#             Histology = unique(Histology)) %>% ungroup() %>%
+#   left_join(total_df) %>%
+#   left_join(WES_df) %>%
+#   mutate(percent = muts_in_et/n_muts_output, 
+#          muts_norm = case_when(type=="WES"~muts_in_et/exome_Mb, 
+#                                type=="WGS"~muts_in_et/genome_Mb))
+# 
+# stat.test <- df %>%
+#   filter(Histology!="SARC") %>%
+#   mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE"))) %>%
+#   wilcox_test(muts_norm~Histology) %>%
+#   add_xy_position(step.increase = 0.03)
+# df %>%
+#   mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+#   ggplot(aes(x=Histology, y=muts_norm)) +
+#     geom_boxplot(aes(fill=Histology), outlier.shape = NA, show.legend = F) +
+#     geom_jitter(height = 0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+#     #geom_jitter(aes(color = patient), size=3, height=0, width=0.2) +
+#     #scale_color_manual(values=pat_col) +
+#     stat_pvalue_manual(stat.test %>% filter(p<0.1), label="p", tip.length = 0, hide.ns = F) +
+#     #scale_y_continuous(breaks=seq(0,30000,5000), labels = seq(0,30,5)) +
+#     border() +
+#     scale_fill_manual(values=hist_col) +
+#     labs(x=NULL, y="APOBEC-induced mutations per Mb", caption="wilcox unadj p shown; t-test ns")
+# ggsave(paste0(wd,"Overall_MutSigs/APOBEC_byHist_boxplot_abs.pdf"), width=4, height=3.5)
+# ggsave(paste0(figs,"Overall_MutSigs/APOBEC_byHist_boxplot_abs.pdf"),  width=4, height=3.5)
+# 
+# ##Clock
+# df <- sbs %>%
+#   filter(etiology=="Clock-like", n_muts_output>50) %>%
+#   group_by(patient) %>%
+#   summarise(muts_in_et = sum(n_muts_sig), 
+#             Histology = unique(Histology)) %>% ungroup() %>%
+#   left_join(total_df) %>%
+#   left_join(WES_df) %>%
+#   left_join(clinical %>% select(Patient, Age_at_Death, Survival_from_Dx_years), by=c("patient"="Patient")) %>%
+#   mutate(percent = muts_in_et/n_muts_output, 
+#          muts_norm = case_when(type=="WES"~muts_in_et/exome_Mb, 
+#                                type=="WGS"~muts_in_et/genome_Mb))
+# 
+# stat.test <- df %>%
+#   filter(Histology!="SARC") %>%
+#   mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE"))) %>%
+#   wilcox_test(muts_norm~Histology) %>%
+#   add_xy_position(step.increase = 0.03)
+# df %>%
+#   mutate(Histology=factor(Histology, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+#   ggplot(aes(x=Histology, y=muts_norm)) +
+#     geom_boxplot(aes(fill=Histology), outlier.shape = NA, show.legend = F) +
+#     geom_jitter(height = 0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+#     #geom_jitter(aes(color = patient), size=3, height=0, width=0.2) +
+#     #scale_color_manual(values=pat_col) +
+#     stat_pvalue_manual(stat.test, label="p", tip.length = 0, hide.ns = "p") +
+#     #scale_y_continuous(breaks=seq(0,40000,10000), labels = seq(0,40,10)) +
+#     border() +
+#     scale_fill_manual(values=hist_col) +
+#     labs(x=NULL, y="Clock-induced mutations per Mb", caption="t-test ns; wilcox ns")
+# ggsave(paste0(wd,"Overall_MutSigs/Clock_byHist_boxplot_abs.pdf"), width=4, height=3.5)
+# ggsave(paste0(figs,"Overall_MutSigs/Clock_byHist_boxplot_abs.pdf"),  width=4, height=3.5)
+# 
+# #clock correlation to survival/age
+# df %>% 
+#   ggplot(aes(x=Age_at_Death, y=muts_norm)) +
+#     geom_smooth(method=lm, color="black", fill="snow2") +
+#     stat_cor(label.x.npc = 0) +
+#     geom_point(size=3) +
+#     labs(x="Age at Death", y="Clock-induced mut/Mb")
+# df %>% 
+#   #filter(Survival_from_Dx_years<8) %>%
+#   ggplot(aes(x=Survival_from_Dx_years, y=muts_norm)) +
+#     labs(x="OS", y="Clock-induced mut/Mb") +
+#     geom_smooth(method=lm, color="black", fill="snow2") +
+#     stat_cor(label.x.npc = 0) +
+#     geom_point(size=3) +
+#     scale_x_continuous(breaks=seq(0,10,2), limits = c(0,10))
+
+##Cisplatin
+df <- sbs %>%
+  filter(etiology=="Platinum", n_muts_output>50, Cisplatin=="Y", cluster_status!="Founder") %>%
+  group_by(patient) %>%
+  summarise(muts_in_et = sum(n_muts_sig), 
+            Histology = unique(Histology), 
+            FANC_hist = unique(FANC_hist)) %>% ungroup() %>%
+  left_join(total_df) %>%
+  left_join(WES_df) %>%
+  mutate(percent = muts_in_et/n_muts_output, 
+         muts_norm = case_when(type=="WES"~muts_in_et/exome_Mb, 
+                               type=="WGS"~muts_in_et/genome_Mb))
+write.csv(df, 'Supplementary_Figure9-10_MutSigs/source_data/S9F_Cisplatin_mutMb.csv', row.names = F)
+
+stat.test <- df %>%
+  filter(FANC_hist%in% c("UC_UCSD", "PUC")) %>%
+  t_test(muts_norm~FANC_hist) %>%
+  add_xy_position(step.increase = 0.03)
+tp <- stat.test$p
+stat.test <- df %>%
+  filter(FANC_hist%in% c("UC_UCSD", "PUC")) %>%
+  wilcox_test(muts_norm~FANC_hist) %>%
+  add_xy_position(step.increase = 0.03)
+wp <- stat.test$p
+df %>%
+  filter(FANC_hist%in% c("UC_UCSD", "PUC")) %>%
+  mutate(FANC_hist=factor(FANC_hist, levels=c("UC_UCSD", "PUC"))) %>%
+  ggplot(aes(x=FANC_hist, y=muts_norm)) +
+    geom_boxplot(aes(fill=FANC_hist), outlier.shape = NA, show.legend = F) +
+    #geom_jitter(height = 0, width=0.2, size=3, shape=21, fill="black", stroke=NA, alpha=0.75) +
+    geom_jitter(aes(color = patient, shape=type), size=3, height=0, width=0.2) +
+    scale_color_manual(values=pat_col) +
+    #stat_pvalue_manual(stat.test, label="p", tip.length = 0, hide.ns = "p") +
+    #scale_y_continuous(breaks=seq(0,40000,5000), labels = seq(0,40,5)) +
+    border() +
+    scale_fill_manual(values=hist_col) +
+    labs(x=NULL, y="Cisplatin-induced mutations per Mb", caption=paste0("t-test ",tp,"; wilcox ", wp))
+ggsave(paste0(wd,"Overall_MutSigs/Cisplatin_byHist_boxplot_abs_nostats.pdf"), width=4, height=3.5)
+ggsave(paste0(figs,"Overall_MutSigs/Cisplatin_byHist_boxplot_abs_nostats.pdf"),  width=4, height=3.5)
+```
+
+
+
+### CISPLATIN SIG ###
+
+Cisplatin levels in non-Founder clones (all subtypes)
+```{r}
+#add together SBS31+35 for each cluster, then for each patient, add together each cluster's 31+35 and take the percent out of the patient's total mutations
+cis_df <- sbs %>%
+  filter(cluster_status %in% c("Shared", "Private"),Cisplatin=="Y",sig %in% c("SBS31", "SBS35"), n_muts_output>50) %>%
+  group_by(cluster) %>%
+  summarise(n_muts_cis = sum(n_muts_sig)) %>% ungroup() %>%
+  left_join(sbs %>% filter(cluster_status %in% c("Shared", "Private")) %>% distinct(cluster, patient, Histology, Cisplatin, n_muts_output, cluster_status)) %>%
+  group_by(patient) %>%
+  summarise(n_muts_cis = sum(n_muts_cis), 
+            n_muts = sum(n_muts_output)) %>% ungroup() %>%
+  left_join(sbs %>% filter(cluster_status %in% c("Shared", "Private")) %>% distinct(patient, Histology, Cisplatin, FANC_hist)) %>%
+  mutate(percent = n_muts_cis/n_muts) 
+
+write.csv(cis_df, paste0(wd, "CisplatinSig_weighted.csv"), row.names = F)
+```
+
+Cisplatin levels in non-Founder clones (UC/UCSD vs PUC) - per patient
+```{r}
+#add together SBS31+35 for each cluster, then for each patient, add together each cluster's 31+35 and take the percent out of the patient's total mutations
+cis_UCPUC <- cis_df %>% filter(FANC_hist %in% c("UC_UCSD", "PUC")) %>%
+  mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC")))
+
+stat.test <- cis_UCPUC %>%
+  t_test(percent~FANC_hist) %>%
+  add_xy_position()
+wtest <- cis_UCPUC %>% wilcox_test(percent~FANC_hist) %>% pull(p)
+cis_UCPUC %>%
+  ggplot(aes(x=FANC_hist, y=percent)) +
+    geom_violin(aes(fill=FANC_hist), show.legend = F) +
+    geom_boxplot(fill="white", alpha=0.7, outlier.shape=NA, width=0.1) +
+    geom_jitter(aes(color=patient), size=3, width=0.2, height = 0) +
+    scale_fill_manual(values=hist_col) +
+    border() +
+    scale_color_manual(values=pat_col) +
+    stat_pvalue_manual(stat.test, label = "t-test p={p}", tip.length = 0) +
+    scale_y_continuous(breaks=seq(0,1,0.2), limits = c(0,1)) +
+    labs(title="Weighted Cisplatin Proportion", x="", y="Proportion Cisplatin Signature", subtitle = "non-Founder clones", caption=paste0("wilcox p=",wtest))
+ggsave(paste0(wd,"CisplatinSig_UCvsPUC.pdf"), width=4, height=4)
+ggsave(paste0(figs,"CisplatinSig_UCvsPUC_nostats.pdf"), width=4, height=4)
+
+cis_UCPUC %>%
+  ggplot(aes(x=FANC_hist, y=percent)) +
+    geom_boxplot(aes(fill=FANC_hist), outlier.shape=NA, show.legend = F) +
+    geom_jitter(aes(color=patient), size=3, width=0.2, height = 0, show.legend = F) +
+    scale_fill_manual(values=hist_col) +
+    border() +
+    scale_color_manual(values=pat_col) +
+    #stat_pvalue_manual(stat.test, label = "t-test p={p}", tip.length = 0) +
+    scale_y_continuous(breaks=seq(0,1,0.25), limits = c(0,1)) +
+    labs(title="Weighted Cisplatin Proportion", x="", y="Proportion Cisplatin Signature", subtitle = "non-Founder clones", caption=paste0("wilcox p=",wtest))
+ggsave(paste0(wd,"CisplatinSig_UCvsPUC_boxplot.pdf"), width=4, height=4)
+ggsave(paste0(figs,"CisplatinSig_UCvsPUC_boxplot_nostats.pdf"), width=1.75, height=4)
+```
+
+Cis Sig in non-founder clones, each clone separate (UC/UCSD vs PUC) **USE**
+```{r}
+df <- sbs %>%
+  filter(cluster_status %in% c("Shared", "Private"),Cisplatin=="Y",sig %in% c("SBS31", "SBS35"), n_muts_output>50) %>%
+  group_by(cluster) %>%
+  summarise(n_muts_cis = sum(n_muts_sig)) %>% ungroup() %>%
+  left_join(sbs %>% filter(cluster_status %in% c("Shared", "Private")) %>% distinct(cluster, patient, Histology, Cisplatin, n_muts_output, cluster_status, FANC_hist)) %>%
+  mutate(percent = n_muts_cis/n_muts_output) %>%
+  filter(Cisplatin =="Y", FANC_hist %in% c("UC_UCSD", "PUC"))%>%
+  mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC")))
+df <- df[sample(nrow(df)), ]
+write.csv(df, 'Figure4/source_data/4B_cisplatinSig_perClone_byHist.csv', row.names = F)
+
+# stat.test <- df %>%
+#   t_test(percent~FANC_hist) %>%
+#   add_xy_position()
+# wtest <- df %>% wilcox_test(percent~FANC_hist) %>% pull(p)
+
+model <- lmer(percent ~ FANC_hist + (1|patient), data = df )
+lmep <- coef(summary(model))[, "Pr(>|t|)"][2] #FAN_hist p=0.010785
+
+#use the quasirandom!
+df %>%
+  ggplot(aes(x=FANC_hist, y=percent)) +
+    geom_boxplot(aes(fill=FANC_hist), outlier.shape=NA, show.legend = F) +
+    geom_quasirandom(aes(fill=patient), size=3, show.legend = F, alpha=0.8, shape=21, stroke=NA, width = 0.25) +
+    scale_fill_manual(values=c(hist_col, pat_col)) +
+    border() +
+    scale_color_manual(values=pat_col) +
+    #stat_pvalue_manual(stat.test, label = "t-test p={p}", tip.length = 0) +
+    scale_y_continuous(breaks=seq(0,1,0.25), limits = c(0,1.1)) +
+    labs(title="Weighted Cisplatin Proportion", x="", y="Proportion Cisplatin Signature", subtitle = "non-Founder clones", caption=paste0("LME p=", round(lmep, 3)))
+ggsave(paste0(figs,"CisplatinSig_UCvsPUC_boxplot_LMEstats.pdf"), width=2.25, height=4)
+```
+
+
+compare cisplatin doses
+```{r}
+cis_dosage <- chemo_dosage %>%
+  filter(cisplatin=="yes") %>%
+  distinct(patient, chemo_type, num_cis_cycles) %>%
+  group_by(patient) %>%
+  summarise(num_cis_cycles = sum(num_cis_cycles))
+
+df <- cis_df %>%
+  left_join(cis_dosage)
+write.csv(df, 'Supplementary_Figure9-10_MutSigs/source_data/S9DE_cisCycles_mutSig.csv', row.names = F)  
+
+stat.test <- cis_df %>%
+  distinct(patient, FANC_hist, Cisplatin) %>%
+  left_join(cis_dosage) %>%
+  filter(FANC_hist %in% c("UC_UCSD", "PUC")) %>%
+  #mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC"))) %>%
+  wilcox_test(num_cis_cycles~FANC_hist) %>%
+  add_xy_position()
+cis_df %>%
+  distinct(patient, FANC_hist, Cisplatin) %>%
+  left_join(cis_dosage) %>%
+  mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC", "NE"))) %>%
+  ggplot(aes(x=FANC_hist, y=num_cis_cycles)) +
+    geom_boxplot(aes(fill=FANC_hist), outlier.shape = NA, show.legend = F, color="black") +
+    geom_jitter(height=0, width=0.2) +
+    stat_pvalue_manual(stat.test, tip.length = 0) +
+    border() +
+    scale_y_continuous(limits = c(0,10), breaks = seq(0,9,3)) +
+    scale_fill_manual(values=hist_col) +
+    labs(x=NULL, y="Number of cycles")
+ggsave(paste0(figs, "Cisplatin_cycles_boxplot.pdf"), width=2, height=2.5)
+cis_df %>%
+  distinct(patient, Histology, Cisplatin, percent) %>%
+  left_join(cis_dosage) %>%
+  ggplot(aes(x=num_cis_cycles, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(aes(color=Histology), size=4, show.legend = F) +
+    stat_cor(label.x.npc = 0, method = "spearman") +
+    border() +
+    scale_color_manual(values=hist_col) +
+    coord_cartesian(ylim=c(0,1))
+ggsave(paste0(figs, "Cisplatin_cycles_correlation.pdf"), width=3, height=3)
+```
+

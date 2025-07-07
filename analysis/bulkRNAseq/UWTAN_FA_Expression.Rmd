@@ -1,0 +1,354 @@
+---
+title: "FA_Expression"
+output: html_document
+date: "2024-10-02"
+---
+RUN: libraries
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(pals)
+library(ggpubr)
+library(rstatix)
+library(GSVA)
+library(pheatmap)
+library(som)
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+```
+
+import patient info
+```{r}
+patient_chemo <- read_csv("UW_Patient_Chemo.csv", show_col_types = F)%>%
+  mutate(FANC_hist = case_when(Histology %in% c("UC", "UCSD", "UCSD_focal")~"UC_UCSD", 
+                               Histology == "PUC"~"PUC", 
+                               .default = Histology))
+
+sig_etiology <- read_csv('Supplementary_Tables/genomic_results/mutation_signatures/COSMICv3.4_SBS.csv', show_col_types = F)
+sample_info <- read_csv('Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv', show_col_types = F)
+```
+
+plotting set up 
+```{r} 
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+hist_col <- c("UC"="#815CA6","UC_UCSD"="#815CA6", "PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD_focal"="#ACD7A0", "UCSD"="#43823D", "SARC"= "#E7CB94")
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+wd <- "FANC_updated/UWTAN/"
+figs <- 'Figure4/v4 Panels/UWTAN/'
+```
+
+
+import UW TAN rnaseq
+```{r}
+#vst expn
+vst <- read_delim("ComBatseq_VST_91samples_19712genes_2_17_2023.txt", delim="\t", show_col_types = F)
+
+#clean up vst
+rnaseq_vst <- vst %>% pivot_longer(cols= -gene, 
+                                  names_to = "sample", 
+                                  values_to = "vst") %>%
+  mutate(patient = substr(sample, 1, 6)) %>%
+  left_join(patient_chemo %>% select(Patient,Cisplatin, FANC_hist), by=c("patient" = "Patient")) %>% 
+  left_join(sample_info %>% select(rnaseq_sampleName, hist_patient, rnaseq_bad), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(rnaseq_bad == "good")
+
+#make matrices (good rnaseq samples, no sarcomatoid)
+vst_mat <- vst %>% pivot_longer(cols=-gene, names_to = "sample", values_to = "vst") %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, rnaseq_bad, hist_patient), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(rnaseq_bad=="good", hist_patient %in% c("UC", "PUC", "UCSD", "NE")) %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst) %>% as.data.frame()
+rownames(vst_mat) <- vst_mat$gene
+vst_mat$gene <- NULL
+vst_mat <- as.matrix(vst_mat)
+```
+
+### FANC EXPRESSION ###
+
+Cisplatin genes of interest
+```{r}
+FA <- c("FANCD1","BRCA2", "FANCD2","BRCA1", "FANCI", "RAD51", "RAD51C", "FANCA", "FANCC", "FANCE", "FANCF", "FANCG") #from my lit search
+```
+
+calculating scores: ( z-score method)
+```{r}
+#calculating across all patients w/ vst
+forplot <- vst_M <- vst %>% pivot_longer(cols=-gene, names_to = "sample", values_to = "vst") %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, rnaseq_bad, hist_patient), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(gene %in% FA, rnaseq_bad=="good") %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst)
+
+forplot_norm <- as.data.frame(normalize(as.matrix(forplot[,2:ncol(forplot)])))
+colnames(forplot_norm) <- colnames(forplot)[2:ncol(forplot)]
+forplot_norm$gene <- forplot$gene
+forplot_norm <- forplot_norm %>% bind_rows(summarise(., across(where(is.numeric),sum),
+                                across(where(is.character),~"Total")))
+
+FA_allpats_vst <- data.frame(colnames(forplot_norm)[1:ncol(forplot)-1], as.numeric(forplot_norm[nrow(forplot_norm),1:ncol(forplot)-1]))
+colnames(FA_allpats_vst) <- c("sample", "FA11_score") 
+FA_allpats_vst <- FA_allpats_vst %>%
+  mutate(Patient = substr(sample, 1,6)) %>%
+  left_join(rnaseq_vst %>% distinct(sample, Cisplatin,hist_patient,FANC_hist, rnaseq_bad))
+#write.csv(FA_allpats_vst, 'Supplementary_Tables/rnaseq/FANC_scores.csv', row.names = F)
+
+rm(forplot, forplot_norm)
+```
+
+graphing FA scores (UC/UCSD vs PUC) - showing all tumors
+```{r}
+##graph only cisplatin treated UC_UCSD/PUC patients
+stat.test <- FA_allpats_vst %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), Cisplatin=="Y") %>%
+  mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC"))) %>%
+  wilcox_test(FA11_score~FANC_hist) %>%
+  add_xy_position(step.increase = .5)
+wp <- stat.test$p
+pval <- FA_allpats_vst %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), Cisplatin=="Y") %>%
+  mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC"))) %>%
+  t_test(FA11_score~FANC_hist) %>%pull(p)
+FA_allpats_vst %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), Cisplatin=="Y") %>%
+  mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC"))) %>%
+  ggplot(aes(x=FANC_hist, y=FA11_score)) +
+    geom_boxplot(outlier.shape = NA,aes(fill=FANC_hist), show.legend = F) +
+    geom_quasirandom(aes(fill=Patient), size=3, width=0.25, height = 0, show.legend = F, alpha=0.8, shape=21, stroke=NA) +
+    scale_fill_manual(values=c(pat_col, hist_col)) +
+    border() +
+    theme(legend.position = "none") +
+    scale_y_continuous(limits = c(-15, 16), breaks = seq(-15, 15, 5)) +
+    #stat_pvalue_manual(stat.test, label="wilcox p={p}", tip.length = 0) +
+    labs(title = "UW TAN FA Score",
+         subtitle = "", 
+         caption= paste0("t-test p=",pval, "; wilcox p=", wp))
+ggsave(paste0(wd,"FA_Expn/FA11_vst_bySubtype_allpats_cis.pdf"), width=4, height=5)
+ggsave(paste0(figs,"FA_Expn/FA11_vst_bySubtype_allpats_cis_wide.pdf"), width=3, height=4)
+```
+
+linear mixed effects model
+ -a better way to account for the non-independence of samples coming from the same patient
+```{r}
+model <- lmer(FA11_score ~ FANC_hist + (1|Patient), data = FA_allpats_vst %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), Cisplatin=="Y"))
+coef(summary(model))[, "Pr(>|t|)"][2] #0.07098477
+```
+
+correlation with cisplatin sig proportion
+```{r}
+cis_sig <- read.csv('FANC_updated/UWTAN/CisplatinSig_weighted.csv')
+
+##each patient median
+corr_df <- FA_allpats_vst %>%
+  group_by(Patient) %>%
+  summarise(FA11_score = median(FA11_score)) %>%
+  left_join(FA_allpats_vst %>% distinct(Patient, FANC_hist, Cisplatin)) %>%
+  filter(Cisplatin=="Y", FANC_hist %in% c("UC_UCSD","PUC")) %>%
+  left_join(cis_sig %>% select(patient, percent), by = c("Patient"="patient"))
+write.csv(corr_df, 'Main_Figures/Figure4/source_data/4D_cisSig_FA_correlation.csv', row.names = F)
+
+##graph
+corr_df %>%
+  ggplot(aes(x=FA11_score, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow3") +
+    stat_cor(label.x.npc = 0.6, label.y = 0.85, method = "spearman") +
+    geom_point(aes(color=Patient, shape=FANC_hist), size=4) +
+    theme(axis.text = element_text(color="black"),
+          rect = element_rect(fill = NULL),
+          axis.ticks = element_line(color="black")) +
+    scale_color_manual(values=pat_col) +
+    border() +
+    coord_cartesian(ylim=c(0,1)) +
+    labs(title="FA-Cisplatin Correlation", x="median FA11_score (from all patients)", y="Prop Cisplatin Sig\n(non-Founder clusters)", caption = "spearman R")
+ggsave(paste0(wd,"FA_Expn/FA_vst-Cis_corrK_FA11_median.pdf"), width=6, height=4)
+ggsave(paste0(figs,"FA_Expn/FA_vst-Cis_corrK_FA11_median_nostats.pdf"), width=5, height=4)
+```
+
+
+### OTHER GENE EXPN ### 
+
+Cisplatin genes of interest
+```{r}
+importers <- c("SLC31A1", "SLC31A2")
+exporters <- c("ATP7A", "ATP7B", "ABCC1", "ABCC2", "ABCC3", "ABCC5")
+GSH <- c("GCLC", "GCLM", "GSTM4", "GSTP1", "GSTT1")
+NER <- c("ERCC1", "ERCC4", "ERCC2", "ERCC3", "ERCC5", "ERCC6", "ERCC8")
+```
+
+calculating z-score across all patients w/ vst
+```{r}
+#importers
+forplot <- vst_M <- vst %>% pivot_longer(cols=-gene, names_to = "sample", values_to = "vst") %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, rnaseq_bad, hist_patient), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(gene %in% importers, rnaseq_bad=="good") %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst)
+
+forplot_norm <- as.data.frame(normalize(as.matrix(forplot[,2:ncol(forplot)])))
+colnames(forplot_norm) <- colnames(forplot)[2:ncol(forplot)]
+forplot_norm$gene <- forplot$gene
+forplot_norm <- forplot_norm %>% bind_rows(summarise(., across(where(is.numeric),sum),
+                                across(where(is.character),~"Total")))
+
+import_allpats_vst <- data.frame(colnames(forplot_norm)[1:ncol(forplot)-1], as.numeric(forplot_norm[nrow(forplot_norm),1:ncol(forplot)-1]))
+colnames(import_allpats_vst) <- c("sample", "score") 
+import_allpats_vst <- import_allpats_vst %>%
+  mutate(Patient = substr(sample, 1,6), 
+         score_type = "import") %>%
+  left_join(rnaseq_vst %>% distinct(sample, Cisplatin,hist_patient,FANC_hist, rnaseq_bad))
+
+#exporters
+forplot <- vst_M <- vst %>% pivot_longer(cols=-gene, names_to = "sample", values_to = "vst") %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, rnaseq_bad, hist_patient), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(gene %in% exporters, rnaseq_bad=="good") %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst)
+
+forplot_norm <- as.data.frame(normalize(as.matrix(forplot[,2:ncol(forplot)])))
+colnames(forplot_norm) <- colnames(forplot)[2:ncol(forplot)]
+forplot_norm$gene <- forplot$gene
+forplot_norm <- forplot_norm %>% bind_rows(summarise(., across(where(is.numeric),sum),
+                                across(where(is.character),~"Total")))
+
+export_allpats_vst <- data.frame(colnames(forplot_norm)[1:ncol(forplot)-1], as.numeric(forplot_norm[nrow(forplot_norm),1:ncol(forplot)-1]))
+colnames(export_allpats_vst) <- c("sample", "score") 
+export_allpats_vst <- export_allpats_vst %>%
+  mutate(Patient = substr(sample, 1,6), 
+         score_type = "export") %>%
+  left_join(rnaseq_vst %>% distinct(sample, Cisplatin,hist_patient,FANC_hist, rnaseq_bad))
+
+#GSH
+forplot <- vst_M <- vst %>% pivot_longer(cols=-gene, names_to = "sample", values_to = "vst") %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, rnaseq_bad, hist_patient), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(gene %in% GSH, rnaseq_bad=="good") %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst)
+
+forplot_norm <- as.data.frame(normalize(as.matrix(forplot[,2:ncol(forplot)])))
+colnames(forplot_norm) <- colnames(forplot)[2:ncol(forplot)]
+forplot_norm$gene <- forplot$gene
+forplot_norm <- forplot_norm %>% bind_rows(summarise(., across(where(is.numeric),sum),
+                                across(where(is.character),~"Total")))
+
+GSH_allpats_vst <- data.frame(colnames(forplot_norm)[1:ncol(forplot)-1], as.numeric(forplot_norm[nrow(forplot_norm),1:ncol(forplot)-1]))
+colnames(GSH_allpats_vst) <- c("sample", "score") 
+GSH_allpats_vst <- GSH_allpats_vst %>%
+  mutate(Patient = substr(sample, 1,6), 
+         score_type = "GSH") %>%
+  left_join(rnaseq_vst %>% distinct(sample, Cisplatin,hist_patient,FANC_hist, rnaseq_bad))
+
+#NER
+forplot <- vst_M <- vst %>% pivot_longer(cols=-gene, names_to = "sample", values_to = "vst") %>%
+  left_join(sample_info %>% select(rnaseq_sampleName, rnaseq_bad, hist_patient), by=c("sample"="rnaseq_sampleName")) %>%
+  filter(gene %in% NER, rnaseq_bad=="good") %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst)
+
+forplot_norm <- as.data.frame(normalize(as.matrix(forplot[,2:ncol(forplot)])))
+colnames(forplot_norm) <- colnames(forplot)[2:ncol(forplot)]
+forplot_norm$gene <- forplot$gene
+forplot_norm <- forplot_norm %>% bind_rows(summarise(., across(where(is.numeric),sum),
+                                across(where(is.character),~"Total")))
+
+NER_allpats_vst <- data.frame(colnames(forplot_norm)[1:ncol(forplot)-1], as.numeric(forplot_norm[nrow(forplot_norm),1:ncol(forplot)-1]))
+colnames(NER_allpats_vst) <- c("sample", "score") 
+NER_allpats_vst <- NER_allpats_vst %>%
+  mutate(Patient = substr(sample, 1,6),
+         score_type = "NER") %>%
+  left_join(rnaseq_vst %>% distinct(sample, Cisplatin,hist_patient,FANC_hist, rnaseq_bad))
+
+rm(forplot, forplot_norm)
+
+#add together
+all_scores <- rbind(import_allpats_vst , export_allpats_vst) %>% rbind(GSH_allpats_vst) %>% rbind(NER_allpats_vst)
+
+write.csv(all_scores, 'Supplementary_Figures/Supplementary_Figure9-10_MutSigs/source_data/S9G_otherPathway_vstScores.csv', row.names = F)
+```
+
+graph scores
+```{r}
+all_scores %>% 
+  filter(FANC_hist %in% c("UC_UCSD", "PUC"), Cisplatin == "Y") %>%
+  mutate(FANC_hist = factor(FANC_hist, levels=c("UC_UCSD", "PUC")), 
+         score_type = factor(score_type, levels=c("import", "export", "GSH", "NER"))) %>%
+  ggplot(aes(x=FANC_hist, y=score)) +
+    geom_violin(aes(fill=FANC_hist), show.legend = F) +
+    geom_jitter(aes(color=Patient, shape=Cisplatin), width=0.2, size=3) +
+    geom_boxplot(fill="white", width=0.1, outlier.shape = NA, alpha=0.7) +
+    scale_color_manual(values=pat_col) +
+    scale_fill_manual(values=hist_col) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
+    facet_wrap(~score_type, scales = "free") +
+    labs(x=NULL, y="Z-score", caption = "score from vst; t-test unadj p-val")
+ggsave(paste0(figs, "Supplemental/Other_pathways_vst.pdf"), width=6, height=6)
+```
+
+linear mixed effects model other pathways
+```{r}
+model <- lmer(score ~ FANC_hist + (1|Patient), data = all_scores %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), score_type =="import"))
+coef(summary(model))[, "Pr(>|t|)"][2] #import p = 0.1622937
+
+model <- lmer(score ~ FANC_hist + (1|Patient), data = all_scores %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), score_type =="export"))
+coef(summary(model))[, "Pr(>|t|)"][2] #export p = 0.4065584
+
+model <- lmer(score ~ FANC_hist + (1|Patient), data = all_scores %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), score_type =="GSH"))
+coef(summary(model))[, "Pr(>|t|)"][2] #GSH p = 0.02311702
+
+model <- lmer(score ~ FANC_hist + (1|Patient), data = all_scores %>% filter(FANC_hist %in% c("UC_UCSD", "PUC"), score_type =="NER"))
+coef(summary(model))[, "Pr(>|t|)"][2] #NER p = 0.5219052
+```
+
+
+### CCP CORRELATION ##
+
+```{r}
+CCP <-toupper(c('Foxm1', 'Aspm', 'Tk1', 'Prc1', 'Cdc20', 'Bub1b', 'Pbk', 'Dtl',
+                  'Cdkn3', 'Rrm2', 'Asf1b', 'Cep55', 'Cdk1', 'Dlgap5', 'Ska1', 'Rad51',
+                  'Kif11', 'Birc5', 'Rad54l', 'Cenpm', 'Pclaf', 'Kif20a', 'Pttg1',
+                  'Cdca8', 'Nusap1', 'Plk1', 'Cdca3', 'Orc6', 'Cenpf', 'Top2a', 'Mcm10'))
+
+#rnaseq into matrix form: samples as cols, genes as rows
+genes <- rnaseq_vst %>% select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst) %>% pull(gene)
+rnaseq_M <- rnaseq_vst %>% 
+  filter(rnaseq_bad=="good") %>%
+  select(gene, sample, vst) %>%
+  pivot_wider(names_from = sample, values_from = vst) %>% select(-gene)
+rnaseq_M <- as.matrix(rnaseq_M)
+rownames(rnaseq_M) <- genes
+
+#run GSVA
+gsvaPar <- gsvaParam(rnaseq_M, list(CCP=CCP))
+gsva.es <- gsva(gsvaPar, verbose=F)
+CCP_GSVA <- as.data.frame(gsva.es) %>% 
+  pivot_longer(cols=1:ncol(rnaseq_M),names_to = "sample", values_to = "CCP_GSVA") %>%
+  mutate(Patient = substr(sample, 1,6)) %>%
+  left_join(patient_chemo %>% select(Patient, FANC_hist, Cisplatin)) %>%
+  left_join(sample_info %>% select(rnaseq_sampleName,  hist_patient, rnaseq_bad), by = c("sample"= "rnaseq_sampleName"))
+#write.csv(CCP_GSVA, 'Supplementary_Tables/rnaseq/CCP_scores.csv')
+
+#combine with FA score
+CCP_FA <- CCP_GSVA %>%
+  left_join(FA_allpats_vst) %>%
+  filter(FANC_hist %in% c("UC_UCSD", "PUC"), Cisplatin=="Y")
+write.csv(CCP_FA, 'Supplementary_Figures/Supplementary_Figure9-10_MutSigs/source_data/S9H_CCP_FA_scores.csv', row.names = F)
+```
+
+```{r}
+CCP_FA %>%
+  ggplot(aes(x=CCP_GSVA, y=FA11_score)) +
+    geom_smooth(method=lm, color="black", fill="snow3") +
+    stat_cor(label.x.npc = 0, label.y.npc = 0.85, method = "pearson") +
+    geom_point(aes(color=Patient), size=3) +
+    theme(axis.text = element_text(color="black"),
+          rect = element_rect(fill = NULL),
+          axis.ticks = element_line(color="black")) +
+    scale_color_manual(values=pat_col) +
+    border() +
+    labs(title="FA-CCP Correlation", x="CCP GSVA (vst)", y="FA11 Score (vst)", caption = "pearson R")
+ggsave(paste0(wd, "FA_Expn/FA_vst-CCP_GSVA_correlation_Pat_cisUCPUC.pdf"), width=5, height=4)
+```
+

@@ -1,0 +1,182 @@
+---
+title: "Hartwig_Cisplatin_FA_Updated"
+output: html_document
+date: "2024-10-28"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(pals)
+library(ggpubr)
+library(rstatix)
+library(pheatmap)
+library(ComplexHeatmap)
+library(circlize)
+library(som)
+library(readxl)
+library(lme4)
+library(lmerTest)
+library(consensusMIBC)
+library(tidyverse)
+
+wd <-'FANC_updated/Hartwig/'
+figs <- 'Figure4/v4 Panels/Hartwig/'
+```
+
+import Hartwig basic info
+```{r}
+#basic hartwig metadata: sample name matching, cisplatin
+hart_info <- read_csv("hartwigSubtypingPushpa.csv", show_col_types = F)[,c(1,3)] %>%
+  mutate(hmfSampleId = substr(hmfSampleId,1,9)) 
+hart_purity <- read_xlsx("1-s2.0-S0302283822000628-mmc3 (1).xlsx", sheet=3)
+
+#annotations
+hart_GSVA_original <- read_csv("Hartwig_GSVA_Scores.csv", show_col_types = F) %>% mutate(hmfSampleId = substr(hmfSampleId, 1,9)) %>%
+  left_join(hart_info)
+hart_info <- hart_info %>% left_join(hart_GSVA_original %>% select(hmfSampleId, sampleName, consensusClassMIBC)) %>%
+  left_join(hart_purity %>% select(caseId, tumorPurity), by=c("hmfSampleId"="caseId"))
+```
+import Hartwig rnaseq
+```{r}
+#original log2tpm
+hart_tpm <- read_delim("Hartwig_log2_tpm.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE, show_col_types = F)[,1:104]
+
+#make matrices
+hart_tpm_mat <- as.data.frame(hart_tpm)
+rownames(hart_tpm_mat) <- hart_tpm_mat$Gene
+hart_tpm_mat$Gene <- NULL
+hart_tpm_mat <- as.matrix(hart_tpm_mat)
+```
+import Hartwig mutation signatures
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#harwig mutational signatures
+##using custom signature matrix 
+hart_UVart_sigs <- read_delim("mutational_signatures/SBS/HG19/UVart_odd_rerun/Assignment_Solution_Activities.txt", 
+    delim = "\t", escape_double = FALSE, trim_ws = TRUE)
+sig_etiology <- read_csv("COSMICv3.4_SBS.csv", show_col_types = F)
+```
+
+set up plotting
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD_focal"="#ACD7A0", "UCSD"="#43823D","SQ"="#43823D","UC_UCSD"="#815CA6", "UC-sarcomatoid"= "#E7CB94")
+consensus_col <- c("LumU"="#84C2EB", "LumP"="#815CA6", "Stroma-rich"="#f58231","Stroma"="#f58231", "LumNS"="gold", "NE-like"="#E24D74", "Ba/Sq"="#43823D")
+
+sig_etiology <-sig_etiology %>%
+  mutate(et_class_col = case_match(et_class,
+                                    "Clock"~"#93D4FF", "APOBEC"~"#A10300", "DNA_repair_def"~"#005300","Tobacco"~"#FE8F42", "UV"~"#FFD300", "Unknown"~"snow3", "Polymerase"~"turquoise4", "Chemo"~"#783FC1", "ROS"~"#DC5E93", "Carcinogen_exp"~"#886C00"))  %>%
+  mutate(et_color = case_match(etiology, 
+                               "APOBEC"~"#CC7A88", "Aristolochic-acid"~"tan", "Aflatoxin"~"tan3", "Azathioprine"~ "tan4", "Haloalkane"~"khaki3", "Colibactin"~"khaki4", "Duocarmycin"~"bisque2", "Melphalan"~"bisque3",
+                               "Temozolomide"~"plum", "Chemotherapy"~"lavender", "Platinum"~"#783FC1", "Thiopurine-chemo"~"#766C95", "Clock-like"~"paleturquoise", 
+                               "HR-def_BRCA-mut"~"#005300", "MMR-def"~"#637939", "POLE-mut_MMR-def"~"#B5CF6B", "POLD1-mut_MMR-def"~"#CEDB9C","BER-def"~"#02AD24", "AID"~"#C8FF00",
+                               "Polymerase-n"~"seagreen", "POLE-mut"~"turquoise4", "ROS"~"#DC5E93", "Tobacco"~"#FE8F42", "UV-light"~"#FFD300", "Unknown"~"snow3"))
+
+et_class_cols <- distinct(sig_etiology %>% select(et_class, et_class_col))$et_class_col %>% setNames(distinct(sig_etiology %>% select(et_class, et_class_col))$et_class)
+et_cols <- distinct(sig_etiology %>% select(etiology, et_color))$et_color %>% setNames(distinct(sig_etiology %>% select(etiology, et_color))$etiology)
+```
+
+Cisplatin genes of interest
+```{r}
+FA <- c("FANCD1","BRCA2", "FANCD2","BRCA1", "FANCI", "RAD51", "RAD51C", "FANCA", "FANCC", "FANCE", "FANCF", "FANCG") 
+```
+
+clean & combine dfs
+```{r}
+#make proportions from mutation numbers in hart_UVart_sigs
+hart_UVart_sigs <- hart_UVart_sigs %>%
+  mutate(hmfSampleId = substr(Samples, 1,9)) %>%
+  rowwise() %>% mutate(totalMuts_inPat = sum(across(starts_with("SBS")))) %>% ungroup() %>%
+  pivot_longer(cols = starts_with("SBS"), names_to = "sig", values_to = "mut_no") %>%
+  rowwise() %>% mutate(prop = mut_no/totalMuts_inPat) %>% ungroup() %>%
+  left_join(hart_info %>% select(hmfSampleId, HadCisplatin, consensusClassMIBC))
+  
+
+#add up SBS31+35 to get total cisplatin proportion
+hart_UVart_cisSigs <- hart_UVart_sigs %>% filter(sig %in% c("SBS31", "SBS35")) %>%
+  group_by(hmfSampleId) %>%
+  summarise(mut_no = sum(mut_no)) %>%
+  left_join(hart_UVart_sigs %>% distinct(hmfSampleId, totalMuts_inPat, HadCisplatin)) %>%
+  mutate(percent = mut_no/totalMuts_inPat) %>% ungroup()
+  
+
+#clean & annotate rnaseq dataset (log2tpm)
+hart_tpm <- hart_tpm %>% 
+  pivot_longer(cols=starts_with("HMF"), names_to = "hmfSampleId", values_to = "tpm") %>%
+  left_join(hart_info %>% select(hmfSampleId, HadCisplatin))
+```
+
+
+
+***OVERALL MUTATIONAL SIGNATURES***
+```{r}
+Sample_order <- hart_UVart_sigs %>% distinct(Samples, HadCisplatin, consensusClassMIBC) %>% distinct() %>% arrange( HadCisplatin, consensusClassMIBC) %>% pull(Samples)
+
+hart_UVart_sigs %>%
+  left_join(sig_etiology) %>%
+  group_by(Samples, etiology) %>%
+  summarise(prop=sum(prop)) %>%
+  ungroup() %>%
+  mutate(Samples = factor(Samples, levels=Sample_order)) %>%
+  ggplot(aes(x=Samples, y=prop, fill=etiology)) +
+  geom_bar(position = "stack", stat="identity") +
+  theme_classic() +
+  geom_tile(data = hart_UVart_sigs %>% distinct(Samples, consensusClassMIBC) %>% mutate(Samples=factor(Samples, levels=Sample_order)), 
+                aes(x = Samples, y=1.16, fill=consensusClassMIBC), width=0.85, height=.05, inherit.aes = F) +
+  geom_tile(data = hart_UVart_sigs %>% distinct(Samples, HadCisplatin) %>% mutate(Samples=factor(Samples, levels=Sample_order)), 
+              aes(x = Samples, y=1.1, fill=HadCisplatin), width=0.85, height=.05, inherit.aes = F) +
+  theme(axis.text.x = element_text(angle = 60, vjust = 1.2, hjust=1.2)) +
+  scale_fill_manual(values=c(et_cols, consensus_col, hist_col, c("snow3", "red") %>% setNames(c("FALSE", "TRUE")))) +
+  labs(y="Signature Proportion", title="Hartwig Mutational Signatures", subtitle = "Updated UVart_odd; 10_22_2024 predictions")
+ggsave("Hartwig/Hartwig_stacked_allsigs.pdf", width=16, height=9)
+```
+
+
+
+***FA SCORES***
+
+Calculate z scores across Hartwig patients for FANC
+```{r}
+#using hart_tpm
+forplot <- hart_tpm %>% filter(Gene %in% FA, !is.na(hmfSampleId)) %>%
+  select(Gene, hmfSampleId, tpm) %>%
+  pivot_wider(names_from = hmfSampleId, values_from = tpm) 
+
+forplot_norm <- as.data.frame(normalize(as.matrix(forplot[,2:ncol(forplot)])))
+colnames(forplot_norm) <- colnames(forplot)[2:ncol(forplot)]
+forplot_norm$Gene <- forplot$Gene
+forplot_norm <- forplot_norm %>% bind_rows(summarise(., across(where(is.numeric),sum),
+                                across(where(is.character),~"Total")))
+
+FA_allpats <- data.frame(colnames(forplot_norm)[1:ncol(forplot)-1], as.numeric(forplot_norm[nrow(forplot_norm),1:ncol(forplot)-1]))
+colnames(FA_allpats) <- c("hmfSampleId", "FA11_score") 
+FA_allpats <- FA_allpats %>%
+  left_join(hart_info %>% select(hmfSampleId, HadCisplatin))
+```
+
+
+FA-Cis correlation
+```{r}
+#using tpm
+##filter by purity
+FA_cis <- FA_allpats %>% left_join(hart_UVart_cisSigs) %>% left_join(hart_info) %>% 
+  filter(HadCisplatin==T, tumorPurity>=0.25) %>%
+  select(hmfSampleId, sampleName, FA11_score, HadCisplatin, mut_no, totalMuts_inPat, percent, tumorPurity)
+write.csv(FA_cis, 'Figure4/source_data/4E_HMF_cisSig_FA_correlation.csv', row.names = F)
+
+FA_cis %>%
+  ggplot(aes(x=FA11_score, y=percent)) +
+    geom_smooth(method=lm, color="black", fill="snow3") +
+    stat_cor(label.x.npc = 0.5, method="pearson") +
+    geom_point(size=4, alpha=0.7, shape=21, fill="black", stroke=NA) +
+    coord_cartesian(ylim=c(0,1)) +
+    labs(title="Hartwig Cisplatin-FA Correlation", x="FA11 Z-score", y="Proportion Cisplatin Signature", caption = "filter to tumor purity>=0.25; showing pearson correlation (spearman R=-0.27, p=0.12)", subtitle = "score from tpm rnaseq")
+ggsave(paste0(wd, "Cisplatin_FA11_correlation_purity25.pdf"), width=6, height=6)
+ggsave(paste0(figs, "Cisplatin_FA11_correlation_purity25_nostats.pdf"), width=3.5, height=4)
+```
+
+
