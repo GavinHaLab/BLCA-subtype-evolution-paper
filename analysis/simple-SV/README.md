@@ -15,6 +15,6 @@ This directory contains custom scripts for generating consensus structural varia
 
 ## Resources
 
-- GENCODE v44 GTF: [GENCODE Human Release 44](https://www.gencodegenes.org/human/release_44.html)
+- GENCODE v44 GTF: [GENCODE Human Release 44](https://www.gencodegenes.org/human/release_44.html). Choosing BASIC gene annottaion
 - Driver gene list: `analysis/comut_mutations_cna_sv/drivergene_manual_annotations_finalBLCAPaperJune2025.csv`
 - ENCODE blacklist: `encodeBlacklistV2_20240927.txt`
