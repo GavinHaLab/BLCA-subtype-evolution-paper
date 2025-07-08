@@ -1,0 +1,8 @@
+Set parameter LazyConstraints to value 1
+P001PriFFPE-	(PS)	12	3	1	pPS	12200	12200	1.71825
+Set parameter LazyConstraints to value 1
+P001PriFFPE-	(PS, S)	9	3	2	pS	9212.5	9212.5	6.47243
+Set parameter LazyConstraints to value 1
+P001PriFFPE-	(PS, S, M)	9	3	2	pS	9212.5	9212.5	13.6995
+Set parameter LazyConstraints to value 1
+P001PriFFPE-	(PS, S, M, R)	9	3	2	pS	9212.5	9212.5	18.0202
