@@ -139,6 +139,6 @@ for(i in 1:length(sample_names))
  # Filter out rows where the name contains 'chr_Un'
   bed = bed[!grepl("chr_Un", bed$name), ]
   # Write the filtered data frame to a file
-  write.table(as.data.frame(bed), file = paste('../../results/', sample_names[i], '_twooverlap_chr_1000bmaxgap.txt', sep=''), sep='\t', col.names=T, row.names = F,quote=FALSE) # provide your output file path here
+  write.table(as.data.frame(bed), file = paste('../../results/TwoOverlap/1kbgap_annotated_SV/', sample_names[i], '_twooverlap_chr_1000bmaxgap.txt', sep=''), sep='\t', col.names=T, row.names = F,quote=FALSE) # provide your output file path here
 
 }
