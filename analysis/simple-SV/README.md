@@ -5,7 +5,7 @@ Scripts also include breakpoint annotation using GENCODE Release 44 (GRCh38.p14)
 Usage instructions are included within each script.
 
 ## Contents
-
+- Each SV is retained if it is detetected by atleast 2 out of 3 callers, has size > 1000 base pairs, and is not part of the ENCODE blacklisted regions. 
 - `CombiningSVCallers_TwoOverlap_git.R`: Merges and formats SVs across 3 callers for each sample. The callers included in this analyis are SVABA, MANTA and GRIDDS. 
 - `annotate_SV_geneInfo_perSample_git.py`: Annotates SV breakpoints with intersecting genes but has to be used with the wrapper annotate_SV_geneInfo_perSample_wrapper_git,py
 - `annotate_SV_geneInfo_perSample_wrapper_git.py`: The wrapper that calls the annotate_SV_geneInfo_perSample_git to annotate the breakpoints.
