@@ -10,6 +10,3 @@ This directory contains custom scripts for analyzing metastatic seeding patterns
 - `clone_tree_generation_for_machina_BLCA.R`: Runs the seeding analysis per patient using phylogenetic input data from LiCHEE. 
 - `Metastatic_seeding_analysis.Rmd`: Parses and summarizes seeding results for integration with clinical and genomic data.
 
-## Resources
-- Clone assignments and phylogenies are assumed to be generated using LICHeE or PyClone-VI.
-- Output from this analysis feeds into survival and treatment correlation analyses described in Metastatic_seeding_analysis.Rmd.
