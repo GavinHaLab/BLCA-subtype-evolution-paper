@@ -6,5 +6,5 @@ Usage instructions are included within each script.
 
 ## Contents
 
-- `merge_sv_script.R`: Merges and formats SVs across samples
+- `CombiningSVCallers_TwoOverlap_git.R`: Merges and formats SVs across 3 callers for each sample
 - `annotate_sv_genes.py`: Annotates SV breakpoints with intersecting genes
