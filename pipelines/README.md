@@ -1,4 +1,16 @@
+# Variant Calling Pipelines
 
-The pipelines used in this project are added to this folder, the other pipelines which have been used and have already a github link are in the methods with the links. 
-1. Strelka2 - has a folder with its respective snakefile and config files.
-2. MuSE and Varscan2 are as shell scripts that run single tumor with matched normal. This bash script was used within a wrapper to submit multiple jobs on the HPC cluster. 
+This folder contains custom pipelines used for variant calling in this project. Pipelines already published and available on GitHub are referenced in the manuscript Methods section with direct links.
+
+## Contents
+
+- **Strelka2/**  
+  Contains the Snakemake workflow and configuration files used to run Strelka2.
+
+- **MuSE.sh**, **Varscan2.sh**  
+  Shell scripts to run MuSE and Varscan2 for a single tumor-normal pair. These were executed via wrappers to parallelize submissions on an HPC cluster.
+
+## Notes
+
+- Each script is self-contained with usage instructions in the header.
+- Paths and parameters may need adjustment based on your environment or cluster setup.
