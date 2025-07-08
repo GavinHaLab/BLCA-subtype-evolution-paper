@@ -11,10 +11,24 @@ This directory contains custom scripts for analyzing metastatic seeding patterns
 - `Metastatic_seeding_analysis.Rmd`: Parses and summarizes seeding results for integration with clinical and genomic data.
 
 ##Resources
-- Added an example folder 19-001 with the resulting files from using clone_tree_generation_for_machina_BLCA.R and the command to run MACHINA along with the expected results file is added in folder 19-001_input_example
---  Pmh
--- pmh -p P001PriFFPE -c 19_001/19_001_colorfile.tsv 19_001/19_001_tree.tsv 19_001/19_001_labeling.tsv -o 19_001/pmh/ > 19_001/pmh/result.txt
--- Pmh_tr
--- pmh_tr -p P001PriFFPE -c19_001/19_001_colorfile.tsv 19_001/19_001_tree.tsv 19_001/19_001_labeling.tsv -o 19_001/pmh_tr/ > 19_001/pmh_tr/result.txt
+## Example: Running MACHINA on Sample `19-001`
+This repository includes an example folder, `19-001/`, containing output files generated using the script `clone_tree_generation_for_machina_BLCA.R`.
+Input files and expected results are provided in the `19-001_input_example/` directory.
+
+### MACHINA Commands
+
+**pmh**
+```bash
+pmh -p P001PriFFPE \
+    -c 19_001/19_001_colorfile.tsv \
+       19_001/19_001_tree.tsv \
+       19_001/19_001_labeling.tsv \
+    -o 19_001/pmh/ > 19_001/pmh/result.txt
+**pmh_tr**
+pmh_tr -p P001PriFFPE \
+       -c 19_001/19_001_colorfile.tsv \
+          19_001/19_001_tree.tsv \
+          19_001/19_001_labeling.tsv \
+       -o 19_001/pmh_tr/ > 19_001/pmh_tr/result.txt
 
 
