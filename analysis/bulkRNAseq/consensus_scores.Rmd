@@ -1,0 +1,30 @@
+---
+title: "Consensus scores MIBC"
+output: html_document
+date: "2024-10-01"
+---
+
+
+```{r setup}
+
+library(BLCAsubtyping)
+library(consensusMIBC)
+packageVersion("BLCAsubtyping") #[1] '2.1'
+packageVersion("consensusMIBC") #[1] '1.1.0'
+```
+```{r}
+
+corrected_df = read.delim("no_touch_files/ComBat_log2_tpm_values_91samples_19712genes_4_7_2021.txt", 
+                          header=T, stringsAsFactors = FALSE, row.names = 1, check.names=FALSE)
+sample_key = read.delim("no_touch_files/sample_key_correct_order.txt", 
+                        header=T, stringsAsFactors = FALSE)
+sample_key$BodyRegion = sample_key$Met_tissue 
+identical(colnames(corrected_df), sample_key$sampleName)
+
+cl <- classify(expMat = corrected_df, classification.systems = c("Baylor", "UNC", "MDA", "CIT", "Lund", "TCGA"))
+ans = getConsensusClass(corrected_df, minCor = .2, gene_id = "hgnc_symbol")
+cl = cbind(cl, ans[match(rownames(ans), cl[,1]), ])
+write.table(cl, file.path(resdir, "Ming_subtype_91_samples_combat_corrected_data.txt"), 
+            sep="\t", quote=FALSE, row.names=FALSE, col.names=TRUE)
+
+```
