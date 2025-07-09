@@ -23,12 +23,17 @@ pmh -p P001PriFFPE \
     -c 19_001/19_001_colorfile.tsv \
        19_001/19_001_tree.tsv \
        19_001/19_001_labeling.tsv \
-    -o 19_001/pmh/ > 19_001/pmh/result.txt
+    -o 19_001/pmh/ > 19_001/pmh_result.txt
 **pmh_tr**
 pmh_tr -p P001PriFFPE \
        -c 19_001/19_001_colorfile.tsv \
           19_001/19_001_tree.tsv \
           19_001/19_001_labeling.tsv \
-       -o 19_001/pmh_tr/ > 19_001/pmh_tr/result.txt
+       -o 19_001/pmh_tr/ > 19_001/pmh_tr_result.txt
+
+**DOT to PDF Conversion**
+MACHINA generates migration tree visualizations as .dot files in the results/ directory. To convert these files into PDF format for easier viewing and sharing, use the following command:
+dot -Tpdf sampleName-S.dot -o sampleName-S.pdf
+
 
 
