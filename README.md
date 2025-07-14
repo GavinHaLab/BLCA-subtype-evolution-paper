@@ -20,5 +20,6 @@ This repository contains code, data, and results for analyzing clonal and genomi
 ├── pipelines/           # Used to share pipelines used for the project such as mutation callers and a shell scripts if a custom pipleline was utilized. 
 ├── LICENSE
 └── README.md
+
 ## Resources
 The GRCh38 version is downloaded from the google bucket gs://genomics-public-data/resources/broad/hg38/v0/  
