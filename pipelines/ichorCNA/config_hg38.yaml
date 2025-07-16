@@ -1,5 +1,5 @@
 ## read depth params ##
-readCounterScript:  /fh/fast/ha_g/app/bin/readCounter
+readCounterScript:  /pathTo/readCounter
 chrs:
   chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY
 binSize:  1000000 # set window size to compute coverage
@@ -7,20 +7,20 @@ binSize:  1000000 # set window size to compute coverage
 ## ichorCNA params ##
 ichorCNA_numCores: 1
 ## EDIT
-ichorCNA_libdir: /fh/fast/ha_g/user/akreitzm/ichorCNA # include if ichorCNA R source files changed but package has not been updated within R
+ichorCNA_libdir: ../data/ichorCNA # include if ichorCNA R source files changed but package has not been updated within R
 # included in GitHub repo
-ichorCNA_rscript:  /fh/fast/ha_g/user/akreitzm/ichorCNA/scripts/runIchorCNA.R
+ichorCNA_rscript: ../data//runIchorCNA.R
 # use panel matching same bin size (optional)
 ##EDIT
-ichorCNA_normalPanel: /fh/fast/ha_g/user/akreitzm/ichorCNA/inst/extdata/HD_ULP_PoN_hg38_1Mb_normAutosomes_median.rds
+ichorCNA_normalPanel: ../data//HD_ULP_PoN_hg38_1Mb_normAutosomes_median.rds
 # must use gc wig file corresponding to same binSize (required)
-ichorCNA_gcWig: /fh/fast/ha_g/user/akreitzm/ichorCNA/inst/extdata/gc_hg38_1000kb.wig
+ichorCNA_gcWig: ../data//gc_hg38_1000kb.wig
 # must use map wig file corresponding to same binSize (required)
-ichorCNA_mapWig:  /fh/fast/ha_g/user/akreitzm/ichorCNA/inst/extdata/map_hg38_1000kb.wig
-ichorCNA_repTimeWig: /fh/fast/ha_g/user/akreitzm/ichorCNA/inst/extdata/Koren_repTiming_hg38_1000kb.wig
+ichorCNA_mapWig:  ../data//map_hg38_1000kb.wig
+ichorCNA_repTimeWig: ../data//Koren_repTiming_hg38_1000kb.wig
 # use bed file if sample has targeted regions, eg. exome data (optional)
 ichorCNA_exons:  NULL
-ichorCNA_centromere:  /fh/fast/ha_g/user/akreitzm/ichorCNA/inst/extdata/GRCh38.GCA_000001405.2_centromere_acen.txt
+ichorCNA_centromere:  ../data//GRCh38.GCA_000001405.2_centromere_acen.txt
 ichorCNA_minMapScore: 0.75
 ichorCNA_chrs:  paste0('chr', c(1:22, \"X\"))
 ichorCNA_fracReadsInChrYForMale: 0.002
