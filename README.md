@@ -1,7 +1,7 @@
 # BLCA-subtype-evolution-paper
 ## Keywords
 
-`Bladder cancer` · `Tumor heterogeneity` · `Clonal evolution` · `Tumor immune microenvironment` `cell-free DNA` · `WGS` · `Phylogenetics` · `Genomic profiling`· `Transcriptomics`
+`Bladder cancer` · `Tumor heterogeneity` · `Clonal evolution` · `Tumor immune microenvironment` `cell-free DNA` · `WGS` · `Phylogenetics` · `Transcriptomics`. `Genomic profiling`·
 
 ---
 
