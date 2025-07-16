@@ -3,8 +3,9 @@
 This folder contains custom pipelines used for variant calling in this project. Pipelines already published and available on GitHub are referenced in the manuscript Methods section with direct links.
 
 ## Contents
-- **ichorCNA/**
-    Contains the pipelines used for ichorCNA runs on Ultra-low-pass cell-free DNA samples. This pipeline was used to obtain tumor fraction and further decide which samples to choose for WGS runs.
+- **ichorCNA/**  
+   Contains the Snakemake workflow and configuration files used to run ichorCNA.
+  
 - **Strelka2/**  
    Contains the Snakemake workflow and configuration files used to run Strelka2.
 
