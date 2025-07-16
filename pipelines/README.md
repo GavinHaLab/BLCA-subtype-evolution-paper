@@ -4,7 +4,7 @@ This folder contains custom pipelines used for variant calling in this project. 
 
 ## Contents
 - **ichorCNA/**  
-   Contains the Snakemake workflow and configuration files used to run ichorCNA.
+   Contains the Snakemake workflow and configuration files used to run ichorCNA. The orginal repo can be found at https://github.com/GavinHaLab/ichorCNA
   
 - **Strelka2/**  
    Contains the Snakemake workflow and configuration files used to run Strelka2.
