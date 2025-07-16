@@ -22,4 +22,4 @@ This repository contains code, data, and results for analyzing clonal and genomi
 └── README.md
 
 ## Resources
-The GRCh38 version is downloaded from the google bucket gs://genomics-public-data/resources/broad/hg38/v0/  
+The GRCh38 version used for this project is downloaded from the google bucket gs://genomics-public-data/resources/broad/hg38/v0/  
