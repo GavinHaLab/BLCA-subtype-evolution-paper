@@ -4,9 +4,9 @@ This folder contains custom pipelines used for variant calling in this project. 
 
 ## Contents
 - **ichorCNA/**
-  Contains the pipelines used for ichorCNA runs on Ultra-low-pass cell-free DNA samples. This pipeline was used to obtain tumor fraction and further decide which samples to choose for WGS runs.
+    Contains the pipelines used for ichorCNA runs on Ultra-low-pass cell-free DNA samples. This pipeline was used to obtain tumor fraction and further decide which samples to choose for WGS runs.
 - **Strelka2/**  
-  Contains the Snakemake workflow and configuration files used to run Strelka2.
+   Contains the Snakemake workflow and configuration files used to run Strelka2.
 
 - **MuSE.sh**, **Varscan2.sh**  
   Shell scripts to run MuSE and Varscan2 for a single tumor-normal pair. These were executed via wrappers to parallelize submissions on an HPC cluster.
