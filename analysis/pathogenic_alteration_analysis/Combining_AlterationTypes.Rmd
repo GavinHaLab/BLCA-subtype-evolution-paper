@@ -1,0 +1,362 @@
+---
+title: "Combined_Figs"
+output: html_document
+date: "2025-02-27"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(ggpubr)
+library(rstatix)
+library(ggbeeswarm)
+library(tidyverse)
+```
+
+set up plotting
+```{r}
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD"="#43823D", "UC-sarcomatoid" = "#D2BEA5", "SARC" = "#D2BEA5", "UC_Sarc"="#D2BEA5")
+FSP_col <- c("Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220")
+
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+CN_col <- c("Amp"="#e6194b", "Del"="#000075", "Neutral"="snow2",
+            "Founder_Amp"="#990F26", "Shared_Amp"="#e6194b", "Private_Amp"="#E6B8BF", "Founder_Del"="#000075", "Shared_Del"="#4363d8", "Private_Del"="#9ECAE1", "Founder_Neutral"= "snow2", "Shared_Neutral"="snow2", "Private_Neutral"="snow2")
+site_col <- c("Lung"="#8D7F96", "Liver"="#B867A9", "Lymph"="#F8AEA8", "LN"="#F8AEA8","Other"="#C2D7EF", "Primary"="#750F2C")
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+small_legend <- theme(
+  legend.text = element_text(size = 8),          # Adjust text size
+  legend.title = element_text(size = 10),        # Adjust title size
+  legend.key.size = unit(0.5, "cm")              # Adjust key size
+)
+
+wd <- "Figure3/raw_images/source_data/"
+figs <- 'Figure3/raw_images/combined_figs/'
+sups <- 'Supplementary_Figure8/raw_images/'
+```
+
+import data
+```{r}
+#for figure 3B
+path_CN <- read.csv(paste0(wd,'CNA_byPathogenic.csv'))
+path_mut <- read.csv(paste0(wd,'Fig2_Mutations_Fig2b_pathogenic.csv'))
+path_SV <- read.csv(paste0(wd,'Fig2_SV_Fig2b_pathogenic.csv'))
+
+#for figure 3H
+hist_CN <- read.csv(paste0(wd,'CNA_byHistology.csv'))
+hist_mut <- read.csv(paste0(wd,'Fig2_Mutations_Fig2f_Histology_allTypes.csv'))
+hist_SV <- read.csv(paste0(wd,'Fig2_SV_Fig2f_Histology.csv'))
+```
+
+Figure 3B: pathogenic vs non-pathogenic
+```{r}
+path_CN_use <- path_CN %>%
+  select(patient, pathogenic, FSP, prop_FSP)%>%
+  mutate(alt_type = "CNA")
+
+path_mut_use <- path_mut %>%
+  rename(patient = patient_id, FSP = Type, prop_FSP = Proportion, pathogenic = mutations) %>%
+  filter(pathogenic!="del") %>%
+  mutate(pathogenic = case_match(pathogenic, "all"~"non_pathogenic", "BLCAdel"~"pathogenic")) %>%
+  select(patient, pathogenic, FSP, prop_FSP)%>%
+  mutate(alt_type = "Mutation")
+
+path_SV_use <- path_SV %>% 
+  rename(patient = patient_id, FSP = Type, prop_FSP = Proportion, pathogenic = mutations)  %>%
+  mutate(pathogenic = case_when(grepl("driver", pathogenic)~"pathogenic", .default = "non_pathogenic"), 
+         FSP = case_match(FSP, "founder"~"Founder", "private"~"Private", "shared"~"Shared")) %>%
+  select(patient, pathogenic, FSP, prop_FSP)%>%
+  mutate(alt_type = "SV")
+
+path_use <- bind_rows(path_CN_use, path_mut_use, path_SV_use) %>%
+  mutate(FSP = factor(FSP, levels=c("Founder", "Shared", "Private")), 
+         alt_type = factor(alt_type, levels=c("Mutation", "CNA", "SV")))
+#write.csv(path_use, 'Supplementary_Tables/genomic_results/Fig2B_input.csv', row.names = F)
+
+
+#stats path vs non path in each FSP/alt_type
+## paired MWU
+path_use %>%
+  group_by(FSP, alt_type) %>%
+  arrange(patient, FSP, alt_type) %>%
+  wilcox_test(prop_FSP~pathogenic, paired = T) 
+
+ #stats pathogenic only, between alt_types
+## paired MWU (Mut vs CNA)
+path_use %>%
+  filter(pathogenic =="pathogenic", alt_type!="SV") %>%
+  group_by(FSP) %>%
+  arrange(patient, FSP, alt_type) %>%
+  wilcox_test(prop_FSP~alt_type, paired = T) 
+## paired MWU (Mut vs SV)
+path_use %>%
+  filter(pathogenic =="pathogenic", alt_type!="CNA", patient %in% unique(filter(path_use, alt_type=="SV")$patient)) %>%
+  group_by(FSP) %>%
+  arrange(patient, FSP, alt_type) %>%
+  wilcox_test(prop_FSP~alt_type, paired = T) 
+
+#graph
+path_use %>%
+  ggplot(aes(x=pathogenic, y=prop_FSP)) +
+    geom_boxplot(aes(fill=FSP), show.legend = F, outlier.shape=NA, color="black") +
+    geom_jitter(size=1.5,height=0,width=0.2) +
+    scale_fill_manual(values=FSP_col) +
+    facet_grid(rows=vars(alt_type), cols=vars(FSP), scales = "free") +
+    scale_y_continuous(limits = c(0,1.2), breaks = c(0,0.5,1)) +
+    labs(x="", y="Proportion of Alterations", caption = "paired MWU p-value")
+ggsave(paste0(figs, "FSP_byPathogenicity_allAlterations.pdf"), height=6, width=4)
+```
+
+Figure 3H: make dfs
+```{r}
+#counts of each alt type
+SV_counts <- read.csv('Figure3/raw_images/source_data/Fig2_SV_pathogenic_Fig2f_Histology.csv')
+mut_counts <- read.csv('Figure3/raw_images/source_data/Fig2_mutations_pathogenic_Fig2f_Histology.csv')
+
+## CNA counts
+hist_CN <- hist_CN %>%
+  mutate(non_Freq = total_pat - Freq)
+
+## mut counts
+total_df <- hist_mut %>%
+  left_join(mut_counts %>% rename(Freq_pathMut = proprn_Mutations)) %>%
+  filter(Freq_pathMut!=0) %>%
+  mutate(total_mut = round(Freq_pathMut/proprn_Mutations, 0)) %>%
+  distinct(patient_id, Histology, total_mut)
+
+hist_mut_count <- hist_mut %>%
+  left_join(mut_counts %>% rename(Freq_pathMut = proprn_Mutations)) %>%
+  left_join(total_df) %>%
+  mutate(non_Freq = total_mut - Freq_pathMut) %>%
+  arrange(patient_id)
+
+## SV counts
+total_df <- hist_SV %>%
+  mutate(Mutation_Type = case_match(Mutation_Type, "founder_proportion_driver"~"founder_driver", "shared_proportion_driver"~"shared_driver", "private_proportion_driver"~"private_driver")) %>%
+  left_join(SV_counts %>% rename(Freq_pathMut = pathogenic_SVs)) %>%
+  filter(Freq_pathMut!=0) %>%
+  mutate(total_mut = round(Freq_pathMut/proprn_Mutations, 0)) %>%
+  distinct(patient_id, Histology, total_mut)
+
+hist_SV_count <- hist_SV %>%
+  mutate(Mutation_Type = case_match(Mutation_Type, "founder_proportion_driver"~"founder_driver", "shared_proportion_driver"~"shared_driver", "private_proportion_driver"~"private_driver")) %>%
+  left_join(SV_counts %>% rename(Freq_pathMut = pathogenic_SVs)) %>%
+  left_join(total_df) %>%
+  filter(!is.na(total_mut)) %>%
+  mutate(non_Freq = total_mut - Freq_pathMut) %>%
+  arrange(patient_id)
+
+## combine all alt type counts together
+all_count <- hist_CN %>% mutate(alt_type = "CNA") %>%
+  rbind(hist_SV_count %>%
+            rename(patient = patient_id, hist_patient = Histology, FSP = Mutation_Type, prop_FSP = proprn_Mutations, Freq = Freq_pathMut, total_pat = total_mut) %>%
+            mutate(FSP = case_match(FSP, "founder_driver"~"Founder", "shared_driver"~"Shared", "private_driver"~"Private"),
+                   hist_patient = case_match(hist_patient, "UC_Sarc"~"SARC", .default = hist_patient),
+                   alt_type ="SV")) %>%
+  rbind(hist_mut_count %>%
+            rename(patient = patient_id, hist_patient = Histology, FSP = Mutation_Type, prop_FSP = proprn_Mutations, Freq = Freq_pathMut, total_pat = total_mut) %>%
+            mutate(alt_type = "Mutation",
+                   hist_patient = case_match(hist_patient, "UC_Sarc"~"SARC", .default = hist_patient))) %>%
+  mutate(FSP = factor(FSP, levels=c("Founder", "Shared", "Private"))) %>%
+  arrange(alt_type, patient, FSP) %>%
+  select(alt_type, patient, hist_patient, FSP, Freq, non_Freq, total_pat, prop_FSP)
+
+## summed counts (alt types summed together)
+all_count2 <- all_count %>%
+  group_by(patient, FSP) %>%
+  summarise(hist_patient = unique(hist_patient), 
+            total_pat = sum(total_pat), 
+            Freq = sum(Freq), 
+            .groups = "drop") %>%
+  mutate(prop_FSP = Freq/total_pat, 
+         non_Freq = total_pat - Freq)
+write.csv(all_count2, 'Supplementary_Tables/genomic_results/propFSP_summedAllPathAlterations_Fig3H.csv', row.names = F)
+```
+
+New Figure 3H: graphing/stats
+```{r}
+stat.test <- all_count2 %>%
+  filter(hist_patient!="SARC") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE")), 
+         FSP = factor(FSP, levels=c("Founder", "Shared", "Private"))) %>%
+  group_by(hist_patient) %>%
+  wilcox_test(prop_FSP~FSP) %>%
+  filter(p<0.2) %>%
+  add_xy_position()
+
+all_count2 %>%
+  filter(hist_patient!="SARC") %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE")), 
+         FSP = factor(FSP, levels=c("Founder", "Shared", "Private"))) %>%
+  ggplot(aes(x=FSP, y=prop_FSP)) +
+    geom_boxplot(aes(fill=hist_patient), show.legend = F, outlier.shape = NA) +
+    geom_quasirandom(width = 0.25) +
+    scale_fill_manual(values=hist_col) +
+    facet_wrap(~hist_patient) +
+    stat_pvalue_manual(stat.test, label="p") +
+    scale_y_continuous(limits = c(0,1), breaks = seq(0,1,0.25)) +
+    border() +
+    labs(x=NULL, y="Proportion of all pathogenic alterations in patient", caption="wilcox unadj p shown if p<0.2")
+ggsave(paste0(figs, "FSP_byHistology_combinedPathAlterations_nostats.pdf"), width=4, height=5.5)
+```
+
+
+### CLINICAL CORRELATIONS ###
+
+import clinical data
+```{r}
+clinical <- read.csv('Supplementary_Tables/clinical_data/all_clinical_data_updated.csv') %>%
+  rename(patient=Patient)
+clinical_sub <- clinical %>%
+  select(patient, Survival_from_Dx_years, dx_to_met_months)
+```
+
+combine clinical + pathogenic
+```{r}
+hist_CN_use <- hist_CN %>%
+  select(patient, hist_patient, FSP, prop_FSP)%>%
+  rename(Histology = hist_patient) %>%
+  mutate(alt_type = "CNA")
+
+hist_mut_use <- hist_mut %>%
+  rename(patient = patient_id, FSP = Mutation_Type, prop_FSP = proprn_Mutations) %>%
+  mutate(alt_type = "Mutation")
+
+hist_SV_use <- hist_SV %>% 
+  rename(patient = patient_id, FSP = Mutation_Type, prop_FSP = proprn_Mutations)  %>%
+  group_by(patient) %>%
+  mutate(total_prop = sum(prop_FSP)) %>% ungroup() %>% arrange(patient) %>%
+  filter(total_prop>0) %>% select(-total_prop) %>%
+  mutate(FSP = case_when(grepl("founder", FSP)~"Founder", grepl("private", FSP)~"Private", grepl("shared", FSP)~"Shared")) %>%
+  mutate(alt_type = "SV")
+
+hist_use <- bind_rows(hist_CN_use, hist_mut_use, hist_SV_use) %>%
+  mutate(FSP = factor(FSP, levels=c("Founder", "Shared", "Private")), 
+         alt_type = factor(alt_type, levels=c("Mutation", "CNA", "SV")), 
+         Histology = case_match(Histology, "UC_Sarc"~"SARC", .default = Histology)) %>%
+  filter(Histology!="SARC")
+
+df_clinical <- hist_use %>%
+  left_join(clinical_sub)
+write.csv(df_clinical, 'Figure3/raw_images/source_data/3I_Clinical_PathogenicFSP_Correlations.csv', row.names = F)
+```
+
+survival to FSP proportion
+```{r}
+#just founder
+df_clinical %>%
+  filter(patient!="17-047", FSP=="Founder") %>%
+  mutate(alt_type = factor(alt_type, levels=c("CNA", "SV", "Mutation"))) %>%
+  ggplot(aes(x=Survival_from_Dx_years, y=prop_FSP)) +
+    #geom_label(aes(label=patient)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(size=3, aes(color=Histology), show.legend = F) +
+    stat_cor(label.x.npc = 0.3, method="spearman") +
+    border(color="black") +
+    scale_x_continuous(breaks=seq(0,8,2)) +
+    scale_y_continuous(breaks=seq(0,1,0.25)) +
+    coord_cartesian(ylim=c(-0.1,1.1)) +
+    facet_grid(rows=vars(alt_type), cols=vars(FSP)) +
+    scale_color_manual(values=hist_col) +
+    labs(x="Survival from Dx (yrs)", y="Proportion of Pathogenic Alterations", caption="spearman")
+ggsave(paste0(figs, "OS_correlation_Founderprop.pdf"), width=3, height=6)
+
+#just Private
+df_clinical %>%
+  filter(patient!="17-047", FSP=="Private") %>%
+  mutate(alt_type = factor(alt_type, levels=c("CNA", "SV", "Mutation"))) %>%
+  ggplot(aes(x=Survival_from_Dx_years, y=prop_FSP)) +
+    #geom_label(aes(label=patient)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(size=3, aes(color=Histology), show.legend = F) +
+    stat_cor(label.x.npc = 0.3, method="spearman") +
+    border(color="black") +
+    scale_x_continuous(breaks=seq(0,8,2)) +
+    scale_y_continuous(breaks=seq(0,1,0.25)) +
+    coord_cartesian(ylim=c(-0.1,1.1)) +
+    facet_grid(rows=vars(alt_type), cols=vars(FSP)) +
+    scale_color_manual(values=hist_col) +
+    labs(x="Survival from Dx (yrs)", y="Proportion of Pathogenic Alterations", caption="spearman")
+ggsave(paste0(figs, "OS_correlation_Privateprop_nostats.pdf"), width=3, height=6)
+```
+
+dx to met to FSP proportion
+```{r}
+#only founder, no stats
+df_clinical %>%
+  filter(patient!="17-047", FSP=="Founder") %>%
+  mutate(alt_type = factor(alt_type, levels=c("CNA", "SV", "Mutation"))) %>%
+  ggplot(aes(x=dx_to_met_months, y=prop_FSP)) +
+    #geom_label(aes(label=patient)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(size=3, aes(color=Histology), show.legend = F) +
+    border(color="black") +
+    scale_x_continuous(breaks=seq(0,96,12)) +
+    scale_y_continuous(breaks=seq(0,1,0.25)) +
+    coord_cartesian(ylim=c(-0.1,1.1)) +
+    stat_cor(label.x.npc = 0.3, method="spearman") +
+    facet_grid(rows=vars(alt_type), cols=vars(FSP)) +
+    scale_color_manual(values=hist_col) +
+    labs(x="Dx to met (months)", y="Proportion of Pathogenic Alterations", caption="spearman")
+ggsave(paste0(figs, "DxtoMet_correlation_Founderprop_nostats.pdf"), width=3, height=6)
+ggsave(paste0(sups, "DxtoMet_correlation_Founderprop_nostats.pdf"), width=3, height=6)
+
+#only private, no stats
+df_clinical %>%
+  filter(patient!="17-047", FSP=="Private") %>%
+  mutate(alt_type = factor(alt_type, levels=c("CNA", "SV", "Mutation"))) %>%
+  ggplot(aes(x=dx_to_met_months, y=prop_FSP)) +
+    #geom_label(aes(label=patient)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(size=3, aes(color=Histology), show.legend = F) +
+    border(color="black") +
+    scale_x_continuous(breaks=seq(0,96,12)) +
+    scale_y_continuous(breaks=seq(0,1,0.25)) +
+    coord_cartesian(ylim=c(-0.1,1.1)) +
+    stat_cor(label.x.npc = 0.3, method="spearman") +
+    facet_grid(rows=vars(alt_type), cols=vars(FSP)) +
+    scale_color_manual(values=hist_col) +
+    labs(x="Dx to met (months)", y="Proportion of Pathogenic Alterations", caption="spearman")
+ggsave(paste0(figs, "DxtoMet_correlation_Privateprop_nostats.pdf"), width=3, height=6)
+ggsave(paste0(sups, "DxtoMet_correlation_Privateprop_nostats.pdf"), width=3, height=6)
+```
+
+correlation CNA COUNT with clinical
+```{r}
+CN_counts <- hist_CN %>%
+  rename(Histology = hist_patient, pathogenic_count = Freq) %>%
+  mutate(alt_type = "CNA", 
+         Histology = case_match(Histology, "UC_Sarc"~"SARC", .default = Histology))%>%
+  select(patient, Histology, FSP, pathogenic_count, alt_type)
+
+df_plot <- CN_counts %>% 
+  filter(FSP=="Founder") %>%
+  left_join(clinical_sub %>%
+              select(patient, Survival_from_Dx_years, dx_to_met_months) %>%
+              mutate(dx_to_met_years = dx_to_met_months/12) %>%
+              select(-dx_to_met_months)) %>%
+  pivot_longer(cols=c(Survival_from_Dx_years,dx_to_met_years), names_to="survival_type", values_to = "survival_years") %>%
+  filter(patient!="17-047") %>%
+  mutate(FSP = factor(FSP, levels=c("Founder", "Shared", "Private")), 
+         survival_type = factor(survival_type, levels=c("Survival_from_Dx_years", "dx_to_met_years"))) 
+write.csv(df_plot, 'Supplementary_Figure8/source_data/S8E_CNA_count_clinical.csv', row.names = F)
+
+df_plot %>%
+  ggplot(aes(x=survival_years, y=pathogenic_count)) +
+    #geom_label(aes(label=patient)) +
+    geom_smooth(method=lm, color="black", fill="snow2") +
+    geom_point(size=3, aes(color=Histology), show.legend = F) +
+    stat_cor(label.x.npc = 0.3, method="spearman") +
+    border(color="black") +
+    scale_x_continuous(breaks=seq(0,8,2)) +
+    scale_y_continuous(breaks=seq(0,18,4)) +
+    coord_cartesian(ylim= c(-0.1,16.5)) +
+    facet_grid(cols=vars(FSP), rows=vars(survival_type)) +
+    scale_color_manual(values=hist_col) +
+    labs(x="Time to Progression (years)", y="Number of Pathogenic CNA", caption="spearman")
+ggsave(paste0(figs, "CNA_pathogenic_correlation.pdf"), width=5, height=5)
+ggsave(paste0(sups, "CNA_pathogenic_correlation.pdf"), width=5, height=5)
+```
