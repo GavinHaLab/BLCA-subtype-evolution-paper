@@ -7,7 +7,12 @@
 
 ## 🔍 Summary
 
-This repository contains code, data, and results for analyzing clonal and genomic heterogeneity in metastatic bladder cancer. We integrate multi-tumors DNA(WGS/WES) sequencing and cell-free DNA to reconstruct subclonal architectures and infer patterns of tumor evolution across primary and metastatic sites.
+This repository contains code, data, and results associated with the manuscript on the analysis of clonal and genomic heterogeneity in metastatic bladder cancer. We integrate multi-tumors DNA(WGS/WES) sequencing and cell-free DNA to reconstruct subclonal architectures and infer patterns of tumor evolution across primary and metastatic sites.
+
+
+The evolution and heterogeneity of lethal metastatic bladder cancer subtypes (2025).
+
+Pushpa Itagi*, Samantha L. Schuster*, Sonali Arora, Thomas W. Persse, Michael Yang, Alan Min, Pooja Chandra, Mohamed Adil, Patricia C. Galipeau, Allie S. Kreitman, Yixin Lin, Minjeong Ko, Erolcan Sayar, Robert D. Patton, Lori Kollath, Abby Meis, Nathan Ji, Khursheed Ali, Hrishi Venkatesh, Claire B. Mills Manasvita Vashisth, Cynthia L. Wladyka, Rosa Nadal, Jessica Hawley, Todd Yezefski, Sarah P. Psutka, John L. Gore, Daniel W. Lin, Peter S. Nelson, Heather H. Cheng, Michael T. Schweizer, Lawrence Fong, John K. Lee, Evan Yu, Eva Corey, Colm Morrissey, Petros Grivas, Robert B. Montgomery, Jonathan L. Wright, Michael C. Haffner, Funda Vakar-Lopez1, Omar Y. Mian, Hung-Ming Lam†, Andrew C. Hsieh†, Gavin Ha†
 
 ---
 
