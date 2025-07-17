@@ -1,0 +1,291 @@
+---
+title: "IncuCyte_Rep2"
+output: html_document
+date: "2024-04-23"
+---
+
+libraries
+```{r message=F, warning=F}
+library(qdapRegex)
+library(pals)
+library(forcats)
+library(drc)
+library(broom)
+library(ggpmisc)
+library(rstatix)
+library(ggpubr)
+library(tidyverse)
+```
+
+set up plotting
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+cis_cols <- c("#C6DBEF", "#FDD0A2") %>% setNames(c("Low","High"))
+cell_cols <- unname(stepped3())[c(1,2,5,6)] %>% setNames(c("UBLC1", "BFTC905", "SW780", "HT1376"))
+
+wd <- "IncuCyte Results/"
+figs <- 'Figure4/v4 Panels/Cell_Lines/'
+sups <- 'Supplementary_Figure9-10_MutSigs/raw_images/'
+```
+
+import all phase confluence data
+```{r message=FALSE, warning=FALSE}
+mycol <- c("hr", paste0(rep(c("Cis_20", "Cis_10", "Cis_5", "Cis_2.5", "Cis_1", "Cis_0"), 5), rep(c("_1", "_2", "_3", "_4", "_5"), each=6)), "Cell_line")
+
+rep1 <- "IncuCyte Results/1_2024-04-04/"
+rep2 <- "IncuCyte Results/2_2024-04-11/byCol/"
+rep3 <- "IncuCyte Results/3_2024-05-02_combined/Results_byCol/"
+
+my_dir <- c(rep1, rep2, rep3)
+my_fl <- c("UBLC1_PhaseConf_bycol.txt", "BFTC905_PhaseConf_bycol.txt", "SW780_PhaseConf_bycol.txt", "HT1376_PhaseConf_bycol.txt")
+COI <- c("UBLC1", "BFTC905", "SW780", "HT1376")
+
+for(i in 1:3){
+  d <- my_dir[i]
+  
+  #read in data for each cell line
+  for(j in 1:4){
+    if(j %in% c(1,3)){
+      assign(paste0(COI[j], "_df"), 
+           read_table(paste0(d, my_fl[j]))[1:25, 3:33] %>% mutate(Elapsed = as.numeric(Elapsed), B2 = as.numeric(B2), C2 = as.numeric(C2), Cell_line = COI[j]) %>%
+             `colnames<-`(mycol))
+    } else(
+      assign(paste0(COI[j], "_df"), 
+           read_table(paste0(d, my_fl[j]))[1:25, 3:33] %>% mutate(Elapsed = as.numeric(Elapsed), B7 = as.numeric(B7), C7 = as.numeric(C7), Cell_line = COI[j]) %>%
+             `colnames<-`(mycol))
+    )
+    
+    #normalize each to 2hr
+    norm_df <- get(paste0(COI[j], "_df")) %>% 
+      mutate(across(starts_with("Cis"), ~./.[hr==2])) %>%
+      pivot_longer(cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "PhaseConf")
+    assign(paste0(COI[j], "_df_norm"), norm_df)
+    }
+    
+    #combine 4 cell lines (w/o normalization)
+    df <- bind_rows(pivot_longer(UBLC1_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "PhaseConf"),
+                          pivot_longer(BFTC905_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "PhaseConf"),
+                          pivot_longer(SW780_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "PhaseConf"),
+                          pivot_longer(HT1376_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "PhaseConf")) %>%
+               mutate(Cis_Dose = as.character(ex_between(Cis_Dose_Rep, "Cis_","_")), 
+                     Rep = as.numeric(sub("Cis_.*_", "", Cis_Dose_Rep)))
+    assign(paste0("rep",i, "_PC"), df)
+    #avg technical replicates (w/o normalization)
+    df_avg <- get(paste0("rep",i, "_PC")) %>%
+        group_by(Cell_line, hr, Cis_Dose) %>% 
+        summarise(PhaseConf = mean(PhaseConf), .groups = "keep") %>% ungroup()
+    assign(paste0("rep",i, "_PC_avg"), df_avg)
+    
+    #combine 4 cell lines (w/ normalization)
+    df <- bind_rows(UBLC1_df_norm, BFTC905_df_norm, SW780_df_norm, HT1376_df_norm) %>%
+              mutate(Cis_Dose = as.numeric(ex_between(Cis_Dose_Rep, "Cis_","_")),
+                     Rep = as.numeric(sub("Cis_.*_", "", Cis_Dose_Rep)))
+    assign(paste0("rep",i, "_PC_0norm"), df)
+    #avg technical replicates (w/ normalization)
+    df_avg <- get(paste0("rep",i, "_PC_0norm")) %>%
+        group_by(Cell_line, hr, Cis_Dose) %>% 
+        summarise(PhaseConf = mean(PhaseConf), .groups = "keep") %>% ungroup()
+    assign(paste0("rep",i, "_PC_0norm_avg"), df_avg)
+}
+
+#clean environment
+rm(df, df_avg, HT1376_df, HT1376_df_norm, SW780_df, SW780_df_norm, BFTC905_df, BFTC905_df_norm, UBLC1_df, UBLC1_df_norm, norm_df)
+```
+
+
+### DOSE RESPONSE CURVES ###
+
+normalize each rep
+```{r}
+for(i in 1:3){
+  df <- get(paste0("rep",i, "_PC_0norm_avg"))
+  df2 <- get(paste0("rep",i, "_PC_0norm"))
+  
+  #get maximal/minimal values for each cell line @ 24hr
+  maxmin <- df %>% filter(hr==24) %>%
+    arrange(PhaseConf) %>%
+    group_by(Cell_line) %>%
+    summarise(Max_Conf = max(PhaseConf), 
+              Min_Conf = min(PhaseConf))
+  
+  #join
+  df_24_norm <- df2 %>% filter(hr==24) %>%
+    left_join(maxmin) %>%
+    mutate(norm_conf = (PhaseConf - Min_Conf)/(Max_Conf-Min_Conf)*100) %>%
+    select(Cis_Dose, Cell_line, Rep, norm_conf)
+  
+  #average replicates
+  df_24_norm_avg <- df_24_norm %>% 
+    group_by(Cell_line, Cis_Dose) %>%
+    summarise(
+      sem = sd(norm_conf)/sqrt(n()), 
+      avg_norm_conf = mean(norm_conf), 
+      .groups = "keep"
+    ) %>% ungroup()
+  
+  assign(paste0("rep",i, "_24_norm_avg"), df_24_norm_avg)
+}
+```
+
+fit curves to data
+```{r}
+combined_IC50 <- data.frame()
+
+for(i in 1:3){
+  df <- get(paste0("rep",i,"_24_norm_avg"))
+  
+  #make curves
+  fit_df <- drm(data = df,
+      formula = avg_norm_conf~Cis_Dose,
+      curveid = Cell_line,
+      fct=LL.4(names=c("Hill Slope", "Min", "Max", "IC50")))
+  
+  #make table of IC50s
+  IC_df <- tidy(fit_df) %>% filter(term =="IC50") %>% select(curve, estimate) %>% mutate(estimate=round(estimate,3)) %>% rename(Cell_line = curve, IC50 = estimate)
+  combined_IC50 <- combined_IC50 %>% bind_rows(IC_df %>% mutate(rep=i, hr=24))
+  params <- tidy(fit_df) %>% filter(term != "Hill Slope") %>% select(term, curve, estimate, std.error, p.value)
+  
+  #get datapoints along fitted curves
+  fit_data <- data.frame(x_val = rep(seq(0,40,0.2), 8), 
+             Cell_line = rep(unique(df$Cell_line), each=length(seq(0,40,0.2)))
+             )
+  fit_data$predict_value <- predict(fit_df, newdata = fit_data)
+  
+  #graph fitted curves with actual data (w/ error bars)
+  p <- df %>% 
+    mutate(Cell_line = fct_relevel(Cell_line, c("SW780", "HT1376", "BFTC905", "UBLC1"))) %>%
+    ggplot(aes(x=Cis_Dose, y=avg_norm_conf, color=Cell_line, ymin=avg_norm_conf-sem, ymax=avg_norm_conf+sem)) +
+    geom_point() +
+    geom_line() +
+    geom_errorbar(width=0.3) +
+    geom_line(data=fit_data,
+              aes(x=x_val, y=predict_value, color=Cell_line), 
+              linetype="dashed", inherit.aes = FALSE) +
+    annotate(geom="table", x=20, y=100, label=list(cbind(IC_df %>% arrange(desc(IC50))))) +
+    theme_bw() +
+    scale_color_manual(values=unname(stepped3())[c(1,3,5,7)]) +
+    labs(title=paste0("Cisplatin Dose Response at 24hr (Rep ",i,")"), x="uM Cisplatin", y="Normalized Confluence\n(norm to 0hr then 0-100)", caption = "SEM error bars, 4 param model")+
+    coord_cartesian(xlim=c(0,20), ylim=c(0,100))
+  print(p)
+  #ggsave(paste0("rep",i,"_IC50.pdf", width=8, height=5)
+}
+```
+
+
+### COMBINED DOSE RESPONSE CURVES ###
+
+combine reps 1+2+3 for dose response curve
+```{r}
+##COMBINE##
+reps123_PC_0norm <- bind_rows(rep1_PC_0norm_avg %>% mutate(Ex_Rep="1"), rep2_PC_0norm_avg %>% filter(hr!=50) %>% mutate(Ex_Rep="2"),rep3_PC_0norm_avg %>% mutate(Ex_Rep="3")) 
+#average experimental reps
+reps123_PC_0norm_avg <- reps123_PC_0norm %>%
+  group_by(Cell_line, hr, Cis_Dose) %>%
+  summarise(PhaseConf=mean(PhaseConf), .groups = "keep") %>%
+  ungroup()
+
+##NORMALIZE##
+#get maximal value for each cell line
+max_conf <- reps123_PC_0norm_avg %>% filter(hr==24) %>%
+  arrange(desc(PhaseConf)) %>%
+  group_by(Cell_line) %>%
+  slice(1) %>% ungroup() %>%
+  select(-hr, -Cis_Dose) %>%
+  rename(Max_Conf = PhaseConf)
+#get minimum value for each cell line
+min_conf <- reps123_PC_0norm_avg %>% filter(hr==24) %>%
+  arrange((PhaseConf)) %>%
+  group_by(Cell_line) %>%
+  slice(1) %>% ungroup() %>%
+  select(-hr, -Cis_Dose) %>%
+  rename(Min_Conf = PhaseConf)
+#join
+reps123_24_norm <- reps123_PC_0norm %>% filter(hr==24) %>%
+  left_join(max_conf) %>%
+  left_join(min_conf) %>%
+  mutate(norm_conf = (PhaseConf - Min_Conf)/(Max_Conf-Min_Conf)*100) %>%
+  select(Cis_Dose, Cell_line, Ex_Rep, norm_conf)
+#average replicates
+reps123_avg_24_norm <- reps123_24_norm %>% 
+  group_by(Cell_line, Cis_Dose) %>%
+  summarise(
+    sem = sd(norm_conf)/sqrt(n()), 
+    avg_norm_conf = mean(norm_conf), 
+    .groups = "keep"
+  ) %>% ungroup()
+
+##FIT CURVES##
+#make curves
+fit_df <- drm(data = reps123_avg_24_norm, 
+    formula = avg_norm_conf~Cis_Dose, 
+    curveid = Cell_line, 
+    fct=LL.4(names=c("Hill Slope", "Min", "Max", "IC50"))) 
+#make table of IC50s
+IC_df <- tidy(fit_df) %>% filter(term =="IC50") %>% select(curve, estimate) %>% mutate(estimate=round(estimate,3)) %>% rename(Cell_line = curve, IC50 = estimate)
+params <- tidy(fit_df) %>% filter(term != "Hill Slope") %>% select(term, curve, estimate, std.error, p.value)
+#get datapoints along fitted curves
+fit_data <- data.frame(x_val = rep(seq(0,40,0.2), 8), 
+           Cell_line = rep(unique(reps123_avg_24_norm$Cell_line), each=length(seq(0,40,0.2)))
+           )
+fit_data$predict_value <- predict(fit_df, newdata = fit_data)
+
+##GRAPH##
+#graph fitted curves with actual data (w/ error bars)
+reps123_avg_24_norm %>% filter(Cell_line %in% c("BFTC905", "UBLC1", "SW780", "HT1376")) %>%
+  mutate(Cell_line = fct_relevel(Cell_line, c("SW780", "HT1376", "BFTC905", "UBLC1"))) %>%
+  ggplot(aes(x=Cis_Dose, y=avg_norm_conf, color=Cell_line, ymin=avg_norm_conf-sem, ymax=avg_norm_conf+sem)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(width=0.3) +
+  geom_line(data=fit_data%>% filter(Cell_line %in% c("BFTC905", "UBLC1", "SW780", "HT1376")),
+            aes(x=x_val, y=predict_value, color=Cell_line), 
+            linetype="dashed", inherit.aes = FALSE) +
+  annotate(geom="table", x=20, y=100, label=list(cbind(IC_df %>% arrange(desc(IC50))))) +
+  scale_color_manual(values=cell_cols) +
+  labs(title="Cisplatin Dose Response at 24hr (all reps combined)", x="uM Cisplatin", y="Normalized Confluence\n(norm to 0hr then 0-100)", caption = "SEM error bars, 4 param model") +
+  coord_cartesian(xlim=c(0,20), ylim=c(0,100))
+#ggsave(paste0(wd, "allreps_IC50_at24hr_notable.pdf"), width=7, height=5)
+```
+
+
+
+bar graph of IC50s
+```{r}
+#group high FA vs low FA
+df1 <- data.frame(Cell_line = c("BFTC905", "UBLC1", "SW780", "HT1376"), FA = c("Low", "Low", "High", "High"))
+two_IC50 <- combined_IC50 %>% left_join(df1) %>% mutate(Cell_line = fct_relevel(Cell_line, c("SW780", "HT1376", "BFTC905", "UBLC1")))
+
+plot_two_IC50 <- two_IC50 %>%
+  group_by(FA, hr) %>%
+  summarise(avg_IC50 = mean(IC50), 
+            stdev = sd(IC50)) %>%
+  mutate(sem = stdev/sqrt(6))
+
+stat.test <- two_IC50 %>%
+  mutate(FA = factor(FA, levels=c("Low", "High"))) %>%
+  group_by(hr) %>%
+  wilcox_test(IC50~FA) %>%
+  add_significance(p.col="p") %>%
+  add_xy_position()
+
+plot_two_IC50 %>% 
+  mutate(FA = factor(FA, levels=c("Low", "High"))) %>%
+  ggplot() +
+    geom_bar(aes(x=FA, y=avg_IC50, fill=FA), stat="identity", show.legend = F) +
+    geom_errorbar(aes(x=FA, ymin=avg_IC50-sem, ymax=avg_IC50+sem), width=0.2) +
+    geom_jitter(data=two_IC50, aes(x=FA, y=IC50, color=Cell_line), inherit.aes = F, size=3, alpha=1, height=0, width=0.2) +
+    stat_pvalue_manual(stat.test, label="p={p}", y.position = 20) +
+    labs(x="FA", y="IC50", title="PhaseConf IC50s (showing each rep)", caption="showing SEM, MWU-test p-val", color="Cell Line") +
+    scale_fill_manual(values=cis_cols) +
+    scale_color_manual(values=cell_cols) +
+    coord_cartesian(ylim=c(0,21))
+#ggsave(paste0(wd, "PhaseConf_IC50_bar_highlowFA.pdf"), width=5, height=4)
+#ggsave(paste0(figs, "PhaseConf_IC50_bar_highlowFA.pdf"), width=5, height=4)
+```
+

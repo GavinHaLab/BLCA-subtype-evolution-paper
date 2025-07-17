@@ -1,0 +1,166 @@
+---
+title: "IncuCyte_Red"
+output: html_document
+date: "2024-05-30"
+---
+
+libraries
+```{r message=F, warning=F}
+library(qdapRegex)
+library(RColorBrewer)
+library(viridis)
+library(pals)
+library(forcats)
+library(drc)
+library(broom)
+library(ggpmisc)
+library(ggpubr)
+library(rstatix)
+library(tidyverse)
+```
+
+set up plotting
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+cis_cols <- c("#C6DBEF", "#FDD0A2") %>% setNames(c("Low","High"))
+cell_cols <- unname(stepped3())[c(1,2,5,6)] %>% setNames(c("UBLC1", "BFTC905", "SW780", "HT1376"))
+
+df1 <- data.frame(Cell_line = c("BFTC905", "UBLC1", "SW780", "HT1376"), FA = c("Low", "Low", "High", "High"))
+
+wd <- 'IncuCyte Results/IncuCyte_R/RedCount_ConfNorm/'
+figs <- 'Figure4/v4 Panels/Cell_Lines/'
+```
+
+import all red count data- red count has already been normalized to confluence %
+```{r message=FALSE, warning=FALSE}
+mycol <- c("hr", paste0(rep(c("Cis_20", "Cis_10", "Cis_5", "Cis_2.5", "Cis_1", "Cis_0"), 5), rep(c("_1", "_2", "_3", "_4", "_5"), each=6)), "Cell_line")
+
+rep2 <- "IncuCyte Results/2_2024-04-11/byCol/"
+rep3 <- "IncuCyte Results/3_2024-05-02_combined/Results_byCol/"
+
+my_dir <- c(rep2, rep3)
+COI <- c("UBLC1", "BFTC905", "SW780", "HT1376")
+my_fl <- paste0(COI, "_RedCount_ConfNorm_bycol.txt")
+
+for(i in 1:2){
+  d <- my_dir[i]
+  rep <- ifelse(i==1, 2, 3)
+  
+  #read in data for each cell line
+  for(j in 1:4){
+    if(j %in% c(1,3)){
+      assign(paste0(COI[j], "_df"), 
+           read_table(paste0(d, my_fl[j]))[1:25, 3:33] %>% mutate(Elapsed = as.numeric(Elapsed), B2 = as.numeric(B2), C2 = as.numeric(C2), D2 = as.numeric(D2), Cell_line = COI[j]) %>%
+             `colnames<-`(mycol))
+    } else(
+      assign(paste0(COI[j], "_df"), 
+           read_table(paste0(d, my_fl[j]))[1:25, 3:33] %>% mutate(Elapsed = as.numeric(Elapsed), B7 = as.numeric(B7), C7 = as.numeric(C7), D7 = as.numeric(D7), Cell_line = COI[j]) %>%
+             `colnames<-`(mycol))
+    )
+    }
+    
+    #combine 4 cell lines
+    df <- bind_rows(pivot_longer(UBLC1_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "RedCountConfNorm"),
+                          pivot_longer(BFTC905_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "RedCountConfNorm"),
+                          pivot_longer(SW780_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "RedCountConfNorm"),
+                          pivot_longer(HT1376_df, cols=starts_with("Cis"), names_to = "Cis_Dose_Rep", values_to = "RedCountConfNorm")) %>%
+               mutate(Cis_Dose = as.character(ex_between(Cis_Dose_Rep, "Cis_","_")), 
+                     Rep = as.numeric(sub("Cis_.*_", "", Cis_Dose_Rep)))
+    assign(paste0("rep",rep, "_red"), df)
+    
+    #avg technical replicates 
+    df_avg <- df %>%
+        group_by(Cell_line, hr, Cis_Dose) %>% 
+        summarise(RedCountConfNorm = mean(RedCountConfNorm), .groups = "keep") %>% ungroup()
+    assign(paste0("rep",rep, "_red_avg"), df_avg)
+}
+
+#clean environment
+rm(df, df_avg, HT1376_df, SW780_df, BFTC905_df, UBLC1_df)
+```
+
+make bar graphs, combined replicates
+```{r}
+#combine
+reps23_red_48 <- rep2_red %>%
+  filter(hr==48) %>%
+  mutate(Ex_Rep = 2, Cis_Dose=as.numeric(Cis_Dose)) %>%
+  bind_rows(
+    rep3_red %>%
+      filter(hr==48) %>%
+      mutate(Ex_Rep = 3, Cis_Dose=as.numeric(Cis_Dose))
+  ) %>%
+  left_join(df1)%>%
+  mutate(Cell_line = factor(Cell_line, levels=c("SW780", "HT1376", "BFTC905", "UBLC1")))
+
+#average bio reps
+reps23_red_48_avg <- reps23_red_48 %>%
+  group_by(Cell_line, Cis_Dose, Ex_Rep) %>%
+  summarize(RedCountConfNorm=mean(RedCountConfNorm)) %>%
+  left_join(df1) %>%
+  mutate(Cell_line = factor(Cell_line, levels=c("SW780", "HT1376", "BFTC905", "UBLC1")))
+
+plot_df <- reps23_red_48_avg %>%
+  group_by(FA, Cis_Dose) %>%
+  summarise(RedCountConfNorm_avg = mean(RedCountConfNorm), 
+            stdev = sd(RedCountConfNorm), 
+            .groups="keep") %>%
+  ungroup() %>%
+  mutate(sem=stdev/sqrt(4)) 
+
+stat.test <- reps23_red_48_avg %>%
+  group_by(Cis_Dose) %>%
+  t_test(RedCountConfNorm~FA, p.adjust.method = "fdr") %>%
+  add_xy_position() %>%
+  add_significance("p")
+
+#bio reps, only 10uM
+plot_df %>% 
+  mutate(FA = factor(FA, levels=c("Low", "High"))) %>%
+  filter(Cis_Dose ==10) %>%
+  ggplot() +
+    geom_bar(aes(x=FA, y=RedCountConfNorm_avg, fill=FA), stat="identity", show.legend = F) +
+    geom_jitter(data = reps23_red_48_avg %>% filter(Cis_Dose ==10), aes(x=FA, y=RedCountConfNorm, color=Cell_line), inherit.aes = F, height=0, width=0.25, size=3) +
+    geom_errorbar(aes(x=FA, ymin = RedCountConfNorm_avg-sem, ymax = RedCountConfNorm_avg+sem), width=.3) +
+    stat_pvalue_manual(stat.test, hide.ns = "p", tip.length = 0, label = "p") +
+    scale_fill_manual(values=cis_cols) +
+    scale_color_manual(values=cell_cols) +
+    labs(x="uM Cisplatin", y="Red Count / Confluence %", color="Cell Line", title="Cell Death at 48hr (Rep 2+3)", caption="showing bio replicates; t test")
+#ggsave(paste0(wd,"CombinedReps_48hr_bar_bio_10uM.pdf"), width=5, height=4)
+```
+
+
+combine redcount confnorm at 48hr for two experimental replicates
+```{r}
+df2 <- rep2_red %>% filter(hr==48) %>%
+  mutate(Ex_Rep = 2, Cis_Dose=as.numeric(Cis_Dose))
+df3 <- rep3_red %>% filter(hr==48) %>%
+  mutate(Ex_Rep = 3, Cis_Dose=as.numeric(Cis_Dose))
+
+plot_df <- bind_rows(df2, df3) %>%
+  group_by(Cell_line, Cis_Dose) %>%
+  summarise(RedCountConfNorm_avg = mean(RedCountConfNorm), 
+            stdev = sd(RedCountConfNorm), 
+            .groups="keep") %>%
+  ungroup() %>%
+  mutate(sem=stdev/sqrt(10)) 
+
+plot_df %>% mutate(Cell_line = fct_relevel(Cell_line, c("SW780", "HT1376", "BFTC905", "UBLC1"))) %>%
+  ggplot() +
+  geom_errorbar(aes(x=Cis_Dose, ymin = RedCountConfNorm_avg-sem, ymax = RedCountConfNorm_avg+sem, color=Cell_line), width=.3) +
+  geom_line(aes(x=Cis_Dose, y=RedCountConfNorm_avg, color=Cell_line, group=Cell_line)) +
+  geom_point(aes(x=Cis_Dose, y=RedCountConfNorm_avg, color=Cell_line)) +
+  scale_color_manual(values=cell_cols) +
+  labs(x="uM Cisplatin", y="Red Count / Confluence %", color="Cell Line", title="Cell Death at 48hr (Both reps)", caption="error bars = SEM")
+#ggsave(paste0(wd, "RedCount_ConfNorm_at48hr_bothreps.pdf"), width=6, height=5)
+```
+
+
+
+
