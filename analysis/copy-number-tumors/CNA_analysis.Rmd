@@ -1,0 +1,313 @@
+---
+title: "CNV_Analysis"
+output: html_document
+date: "2025-01-28"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(ggpubr)
+library(rstatix)
+library(nnet)
+library(pals)
+library(tidyverse)
+```
+
+import CNV file
+```{r}
+#per gene calls
+gene_CNV <- read_delim("output_perpatient_threshold_v5_AllGenes_withNeut_noLOH.txt", delim="\t", show_col_types = F)%>%
+  rename("gene"="...1")
+gene_CNV_sample <- read_delim("all_patients_combined_modified_file.txt", delim="\t", show_col_types = F)
+```
+
+import sample info
+```{r}
+sample_info <- read.csv('all_sequencing_detailed.csv')
+hist_df <- sample_info %>%
+  distinct(patient, hist_patient)
+n_df <- sample_info %>%
+  filter(has_DNAseq=="yes") %>%
+  group_by(patient) %>%
+  summarise(n_tumors=n())
+
+blca_drivers <- read.csv('drivergene_manual_annotations2.csv')
+```
+
+
+set up plotting
+```{r}
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UCSD-Focal"="#ACD7A0","UCSD"="#43823D", "UC-sarcomatoid" = "#D2BEA5", "SARC" = "#D2BEA5", "UC_Sarc"="#D2BEA5")
+FSP_col <- c("Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220")
+
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+CN_col <- c("Amp"="#e6194b", "Del"="#000075", "Neutral"="snow2",
+            "Founder_Amp"="#990F26", "Shared_Amp"="#e6194b", "Private_Amp"="#E6B8BF", "Founder_Del"="#000075", "Shared_Del"="#4363d8", "Private_Del"="#9ECAE1", "Founder_Neutral"= "snow2", "Shared_Neutral"="snow2", "Private_Neutral"="snow2")
+site_col <- c("Lung"="#8D7F96", "Liver"="#B867A9", "Lymph"="#F8AEA8", "LN"="#F8AEA8","Other"="#C2D7EF", "Primary"="#750F2C")
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+small_legend <- theme(
+  legend.text = element_text(size = 8),          # Adjust text size
+  legend.title = element_text(size = 10),        # Adjust title size
+  legend.key.size = unit(0.5, "cm")              # Adjust key size
+)
+
+wd <- 'CNV/'
+figs <- 'Figure3/raw_images/SLS/'
+```
+
+### GENE LEVEL ANALYSIS ###
+
+set up gene level df
+```{r}
+gene_CNV_long <- gene_CNV %>% 
+  pivot_longer(cols=-gene, names_to = "patient", values_to = "CN_Full") %>% 
+  left_join(hist_df) %>%
+  mutate(inBLCA_drivers = case_when(gene %in% blca_drivers$gene ~ "Driver", .default = "Not_Driver")) %>%
+  left_join(blca_drivers %>% select(gene, Category)) %>% 
+  filter(!CN_Full %in% c("Neutral"), !is.na(CN_Full)) %>%
+  mutate(CN = case_when(grepl("Del", CN_Full)&grepl("Amp", CN_Full) ~ "Multiple",
+                        grepl("Del", CN_Full)~"Del",
+                        grepl("Amp", CN_Full)~"Amp",
+                        grepl("Neutral", CN_Full)~"Neutral"), 
+         FSP = case_when(grepl("Shared", CN_Full)&grepl("Private", CN_Full) ~ "Multiple",
+                         grepl("Founder", CN_Full)~"Founder",
+                        grepl("Shared", CN_Full)~"Shared",
+                        grepl("Private", CN_Full)~"Private")) %>%
+  mutate(pathogenic = case_when(Category=="Oncogene"&CN=="Amp"~"pathogenic", 
+                                Category=="Tumor Suppressor"&CN=="Del"~"pathogenic", 
+                                .default = "non_pathogenic")) 
+```
+
+pathogenic vs nonpathogenic df
+```{r}
+#only consider amps for oncogenes and dels for TS
+pathogenic_summary <- gene_CNV_long %>%
+  filter(FSP!="Multiple") %>%
+  select(patient, pathogenic, FSP) %>% table() %>% as.data.frame() %>% arrange(patient, pathogenic) %>%
+  group_by(patient, pathogenic) %>%
+  mutate(total_pat = sum(Freq)) %>% ungroup() %>%
+  rowwise() %>% mutate(prop_FSP = Freq/total_pat) %>% ungroup() %>%
+  mutate(FSP = factor(FSP, levels=c("Founder", "Shared", "Private")), 
+         pathogenic = factor(pathogenic, levels=c("non_pathogenic", "pathogenic"))) 
+#write.csv(pathogenic_summary, paste0(figs, "CNA_byPathogenic.csv"), row.names=F)
+```
+
+clonality by histology df (only pathogenic)
+```{r}
+pathogenic_byHist <- gene_CNV_long %>%
+  filter(FSP!="Multiple", pathogenic=="pathogenic") %>%
+  select(patient, FSP) %>% table() %>% as.data.frame() %>% arrange(patient) %>%
+  left_join(hist_df) %>%
+  group_by(patient) %>%
+  mutate(total_pat = sum(Freq)) %>% ungroup() %>%
+  rowwise() %>% mutate(prop_FSP = Freq/total_pat) %>% ungroup() %>%
+  mutate(FSP = factor(FSP, levels=c("Founder", "Shared", "Private")), 
+         hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) 
+#write.csv(pathogenic_byHist, paste0(figs, "CNA_byHistology.csv"), row.names=F)
+```
+
+per gene stacked bar (Fig S4B)
+```{r message=FALSE, warning=FALSE}
+#start only with pathogenic amps (oncogenes)
+order1 <- gene_CNV_long %>%
+  filter(pathogenic=="pathogenic", Category=="Oncogene") %>%
+  select(gene, FSP) %>% table() %>% as.data.frame() %>%
+  group_by(gene) %>%
+  mutate(total_cnv = sum(Freq)) %>% ungroup() %>%
+  filter(FSP=="Founder") %>%
+  mutate(prop_founder = Freq/total_cnv, 
+         gene = as.character(gene)) %>%
+  arrange(desc(total_cnv), desc(prop_founder)) %>% pull(gene)
+gene_CNV_long %>%
+  filter(pathogenic=="pathogenic", Category=="Oncogene") %>%
+  select(gene, FSP) %>% table() %>% as.data.frame() %>%
+  mutate(FSP = factor(FSP, levels=c("Private", "Shared", "Founder")), 
+         gene = factor(gene, levels=order1)) %>%
+  ggplot(aes(x=gene, y=Freq, fill=FSP)) +
+    geom_bar(position="stack", stat="identity") +
+    scale_fill_manual(values=FSP_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(limits = c(0,12), breaks = seq(0,12,2)) +
+    labs(title="Amplifications in Oncogenes", x="", y="Number of Amps")
+
+#only with pathogenic dels (TS)
+order2 <- gene_CNV_long %>%
+  filter(pathogenic=="pathogenic", Category=="Tumor Suppressor") %>%
+  select(gene, FSP) %>% table() %>% as.data.frame() %>%
+  group_by(gene) %>%
+  mutate(total_cnv = sum(Freq)) %>% ungroup() %>%
+  filter(FSP=="Founder") %>%
+  mutate(prop_founder = Freq/total_cnv, 
+         gene = as.character(gene)) %>%
+  arrange(desc(total_cnv), desc(prop_founder)) %>% pull(gene)
+gene_CNV_long %>%
+  filter(pathogenic=="pathogenic", Category=="Tumor Suppressor") %>%
+  select(gene, FSP) %>% table() %>% as.data.frame() %>%
+  mutate(FSP = factor(FSP, levels=c("Private", "Shared", "Founder")), 
+         gene = factor(gene, levels=order2)) %>%
+  ggplot(aes(x=gene, y=Freq, fill=FSP)) +
+    geom_bar(position="stack", stat="identity") +
+    scale_fill_manual(values=FSP_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    scale_y_continuous(limits = c(0,9), breaks = seq(0,9,3)) +
+    labs(title="Deletions in TS", x="", y="Number of Dels")
+
+#other drivers (goes both ways)
+order3 <- gene_CNV_long %>%
+  filter(inBLCA_drivers=="Driver", Category=="None") %>%
+  select(gene, FSP, CN) %>% table() %>% as.data.frame() %>%
+  group_by(gene) %>% arrange(gene) %>%
+  mutate(total_cnv = sum(Freq)) %>% ungroup() %>%
+  filter(FSP=="Founder") %>%
+  group_by(gene) %>%
+  summarise(Freq = sum(Freq), total_cnv=unique(total_cnv)) %>%
+  mutate(prop_founder = Freq/total_cnv, 
+         gene = as.character(gene)) %>%
+  arrange(desc(total_cnv), desc(prop_founder)) %>% pull(gene)
+gene_CNV_long %>%
+  filter(inBLCA_drivers=="Driver", Category=="None") %>%
+  select(gene, FSP, CN) %>% table() %>% as.data.frame() %>%
+  arrange(gene) %>%
+  mutate(Freq = case_when(CN=="Del"~ -Freq, .default = Freq),
+         FSP = factor(FSP, levels=c("Private", "Shared", "Founder")), 
+         gene = factor(gene, levels=order3)) %>%
+  ggplot(aes(x=gene, y=Freq, fill=FSP)) +
+    geom_bar(position="stack", stat="identity") +
+    scale_fill_manual(values=FSP_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    #scale_y_continuous(limits = c(0,9), breaks = seq(0,9,3)) +
+    labs(title="CNAs in Other Driver Genes", x="", y="Number of CNAs")
+
+#all together
+order1 <- c(order1, unique(filter(gene_CNV_long, inBLCA_drivers=="Driver", Category=="Oncogene", !gene %in% order1)$gene))
+order2 <- c(order2, unique(filter(gene_CNV_long, inBLCA_drivers=="Driver", Category=="Tumor Suppressor", !gene %in% order2)$gene))
+
+order4 <- c(order1, order2, order3)
+gene_CNV_long %>%
+  filter(inBLCA_drivers=="Driver") %>%
+  select(gene, FSP, CN) %>% table() %>% as.data.frame() %>%
+  arrange(gene) %>%
+  mutate(Freq = case_when(CN=="Del"~ -Freq, .default = Freq),
+         FSP = factor(FSP, levels=c("Private", "Shared", "Founder")), 
+         gene = factor(as.character(gene), levels=rev(order4))) %>%
+  ggplot(aes(y=gene, x=Freq, fill=FSP)) +
+    geom_bar(position="stack", stat="identity") +
+    geom_hline(yintercept = length(order4)-cumsum(c(length(order1), length(order2)))+0.5) +
+    geom_vline(xintercept = 0) +
+    scale_fill_manual(values=FSP_col) +
+    theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+    #scale_x_continuous(limits = c(0,9), breaks = seq(0,9,3)) +
+    labs(title="CNAs in All Driver Genes", x="Patients with CNAs", y="Genes")
+ggsave(paste0(wd, "Gene_StackedBar_FSP.pdf"), width=5, height=14)
+ggsave(paste0(figs, "Gene_StackedBar_FSP.pdf"), width=5, height=14)
+
+#find least founder genes
+gene_CNV_long %>%
+  filter(pathogenic=="pathogenic", Category=="Oncogene") %>%
+  select(gene, FSP) %>% table() %>% as.data.frame() %>%
+  group_by(gene) %>%
+  mutate(total_cnv = sum(Freq)) %>% ungroup() %>%
+  filter(FSP=="Founder") %>%
+  mutate(prop_founder = Freq/total_cnv, 
+         gene = as.character(gene)) %>%
+  arrange(desc(total_cnv),prop_founder) %>%
+  filter(prop_founder<0.5, total_cnv>3)
+```
+
+
+### COMUT Fig S4A ###
+
+set up df
+```{r}
+gene_CNV_sample_long <- pivot_longer(gene_CNV_sample, cols=-c(Sample, group), names_to = "gene", values_to = "CN_Full") %>%
+  rename(sample = Sample, patient = group) %>%
+  mutate(sample = case_match(sample, "16-070_Primary-FFPE"~"16-070_Primary-FF", "16-079_Primary-FFPE"~"16-079_Primary-FF", .default = sample)) %>%
+  left_join(sample_info %>% select(dnaseq_sampleName, hist_patient, hist_sample, tumor_site_group), by=c("sample"="dnaseq_sampleName")) %>%
+  mutate(hist_sample = case_match(hist_sample, "UC-sarcomatoid"~"SARC", .default = hist_sample)) %>%
+  mutate(CN = case_when(grepl("Del", CN_Full)&grepl("Amp", CN_Full) ~ "Multiple",
+                        grepl("Del", CN_Full)~"Del",
+                        grepl("Amp", CN_Full)~"Amp",
+                        grepl("Neutral", CN_Full)~"Neutral"), 
+         FSP = case_when(grepl("Shared", CN_Full)&grepl("Private", CN_Full) ~ "Multiple",
+                         grepl("Founder", CN_Full)~"Founder",
+                        grepl("Shared", CN_Full)~"Shared",
+                        grepl("Private", CN_Full)~"Private"))
+```
+
+arrange samples
+```{r}
+pat_order <- gene_CNV_sample_long %>% 
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  distinct(sample, patient, hist_patient, hist_sample) %>% arrange(hist_patient, patient, hist_sample) %>% 
+  pull(patient) %>% unique()
+pat_order <- c("15-108" ,"16-079" ,"17-020", "18-065","19-001" ,"19-044", "16-070",  "17-030", "18-101", "19-022", "16-097" ,"17-026","15-109", "17-071", "18-016", "18-120" ,"19-007", "17-047","19-037", "19-004")
+sample_order <- gene_CNV_sample_long %>% 
+  mutate(patient = factor(patient, levels=pat_order)) %>%
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  distinct(sample, patient, hist_patient, hist_sample, tumor_site_group) %>% arrange(hist_patient, patient, hist_sample) %>% 
+  pull(sample)
+breaks <- gene_CNV_sample_long %>% 
+  mutate(hist_patient = factor(hist_patient, levels=c("UC", "UCSD", "PUC", "NE", "SARC"))) %>%
+  distinct(sample, patient, hist_patient, hist_sample) %>% arrange(hist_patient, patient, hist_sample) %>% 
+  mutate(patient = factor(patient, levels=pat_order)) %>%
+  group_by(hist_patient) %>% summarise(n=n()) %>% pull(n) %>% cumsum()
+```
+
+oncogene comut
+```{r}
+#oncogenes only
+geneset <- blca_drivers %>% filter(Category=="Oncogene") %>% pull(gene) %>% sort()
+geneset <- gene_CNV_sample_long %>%
+  filter(gene %in% geneset, CN=="Amp") %>%
+  distinct(gene, patient) %>%
+  group_by(gene) %>%
+  summarise(n_amp = n()) %>% arrange(desc(n_amp)) %>% pull(gene)
+gene_CNV_sample_long %>%
+  filter(gene %in% geneset) %>%
+  mutate(gene = factor(gene, levels=rev(geneset))) %>%
+  mutate(sample = factor(sample, levels=sample_order)) %>%
+  ggplot() +
+    geom_tile(width=1, height=1, aes(x=sample, y=gene, fill=CN_Full)) +
+    geom_tile(width=1, height=0.5, aes(x=sample, fill=patient, y=length(geneset)+0.8)) +
+    geom_tile(width=1, height=0.5, aes(x=sample, fill=hist_sample, y=length(geneset)+1.3)) +
+    geom_vline(xintercept = breaks+0.5, color="snow4",linetype="solid", linewidth=0.2) +
+    scale_fill_manual(values=c(CN_col, pat_col, hist_col, site_col), na.value = "white", breaks=sort(names(pat_col))) +
+    scale_x_discrete(labels = NULL) +
+    theme(axis.ticks.x = element_blank()) +
+    small_legend +
+    labs(y="Oncogenes",x="Sample", caption="BLCA oncogenes with amps in any patient")
+ggsave(paste0(wd, "Comuts/Comut_oncogenes.pdf"), width=8, height=6)
+ggsave(paste0(figs, "Comut_oncogenes.pdf"), width=8, height=6)
+```
+
+tumor suppressors only
+```{r}
+#TS only
+geneset <- blca_drivers %>% filter(Category=="Tumor Suppressor") %>% pull(gene) %>% sort()
+geneset <- gene_CNV_sample_long %>%
+  filter(gene %in% geneset, CN=="Del") %>%
+  distinct(gene, patient) %>%
+  group_by(gene) %>%
+  summarise(n_del = n())  %>% arrange(desc(n_del)) %>% pull(gene)
+gene_CNV_sample_long %>%
+  filter(gene %in% geneset) %>%
+  mutate(gene = factor(gene, levels=rev(geneset))) %>%
+  mutate(sample = factor(sample, levels=sample_order)) %>%
+  ggplot() +
+    geom_tile(width=1, height=1, aes(x=sample, y=gene, fill=CN_Full)) +
+    geom_tile(width=1, height=0.5, aes(x=sample, fill=patient, y=length(geneset)+0.8)) +
+    geom_tile(width=1, height=0.5, aes(x=sample, fill=hist_sample, y=length(geneset)+1.3)) +
+    geom_vline(xintercept = breaks+0.5, color="snow4",linetype="solid", linewidth=0.2) +
+    scale_fill_manual(values=c(CN_col, pat_col, hist_col, site_col), na.value = "white", breaks=sort(names(pat_col))) +
+    scale_x_discrete(labels = NULL) +
+    theme(axis.ticks.x = element_blank()) +
+    small_legend +
+    labs(y="Tumor Suppressors",x="Sample", caption="BLCA TSs with dels in any patient")
+ggsave(paste0(wd, "Comuts/Comut_tumorSuppressor.pdf"), width=8, height=6)
+ggsave(paste0(figs, "Comut_tumorSuppressor.pdf"), width=8, height=6)
+```
