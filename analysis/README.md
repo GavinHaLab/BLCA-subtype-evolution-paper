@@ -7,6 +7,7 @@ The repository is organized into different  folders, each corresponding to one o
 |--------|-------------|-------------------|
 | `bulkRNAseq/`        | Scripts and metrics related to bulk-RNA seq | Figure 5 |
 | `cfdna-mutation-overlap/`     | For looking into mutation capture in cell-free DNA based on matched tumors | Figure 7 |
+| `cfdna-nucleosome-profiling`     | Script to produce the heatmap for TFs from nucleosome profiling results| Figure 7 |
 | `comut_mutations_cna_sv/`| Landscape plot for muttaions, CNAs and SVs. | Figure 3 |
 | `copy-number-tumors/`    | Copy number alterations and founder, shared, and private clonality statys  | Figure 3 |
 | `experimental_analysis/`      | Fanconi Anemia pathway analysis and experimental vadliation and assays | Figure 3 |
