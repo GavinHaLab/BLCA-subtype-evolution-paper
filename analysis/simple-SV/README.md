@@ -1,4 +1,4 @@
-# Metastatic BLCA Simple SV Analysis
+# mBLCA Simple SV Analysis
 
 This directory contains custom scripts for generating consensus structural variants (SVs) and BEDPE files for metastatic bladder cancer evolution analysis. Breakpoint annotation is performed using GENCODE Release 44 (GRCh38.p14). Usage details are included within each script.
 
