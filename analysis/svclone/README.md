@@ -4,7 +4,7 @@ This repository contains a small demo for merging structural variants (SVs) acro
 
 ## Contents
 - **`TwoOverlap_SVClone_output/`** – Example SVClone output for 4 samples.
-- **`SVClR`** – Generates per-sample SV summary files.
+- **`SVCloneFix_git.R`** – Generates per-sample SV summary files.
 - **`MergeSVs_500bp.R`** – Merges SVs across tumors within a patient using a 500 bp breakpoint overlap.
 
 ## Usage
