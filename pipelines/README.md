@@ -18,7 +18,9 @@ This folder contains custom pipelines used for variant calling in this project. 
 - **TITAN-SVABA/**  
   The orginal repo can be found at https://github.com/GavinHaLab/TitanCNA_SV_WGS. The same pipeline was used with adjusting configs for bins (WES = 50kb, and WGS = 10kb) and was run with the corresponding matched normal and UCSC style for chromosomes. 
 
-## Notes
+- **GRIDDS2/**  
+  The orginal repo can be found at https://github.com/GavinHaLab/gridss2_somatic_sv_call. 
 
+## Notes
 - Each script is self-contained with usage instructions in the header.
 - Paths and parameters may need adjustment based on your environment or cluster setup.
