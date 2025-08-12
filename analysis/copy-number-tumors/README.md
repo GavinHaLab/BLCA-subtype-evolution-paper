@@ -1,4 +1,4 @@
-# CNA matrix generation and other analysis in Fig. 3
+# CNA matrix generation and other analysis in Fig. 3 and Supplements
 
 This repository contains scripts for generating the CNA matrix from a copy number caller and downstream analysis.
 ## Contents
