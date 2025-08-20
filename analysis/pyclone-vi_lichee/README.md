@@ -15,20 +15,25 @@ Original tool github : https://github.com/Roth-Lab/pyclone-vi and https://github
 ## Overview of steps
 1. For each sample/tumor get a consensus list of SNVs and INDELs (high confidence of mutations).
 2. Next, make a Union list of all mutations across multiple-samples from a patient (if there is multi samples data).
-3. Run collect allelic counts to get the reads for mutations, run each sample with this Union list made in step2. See Commands below for further details. 
-4. Place the results from Step3 and curated copy number files (we used TITAN) in two folders.
-5. Use the masterScript_Pyclone_git.py script and place the absoulte paths to above folders in the variables allelicCounts_path and CNA_dir (with segment/bin-level copy number files and tumor fraction which are in the .params file).
-6. Get all the imputs reads such as samples file with a list of sample and patient IDs, Indel folders, output directory, patient clusters (default Pyclone-VI takes 40) if there are any, and a Yes or No to run LICHeE (if we want only Pyclone-Vi to be run)
-7. Run the masterScript_Pyclone_git.py. See Commands below for further details. This should produce a folder and a pycloneInput.tsv file. The demo has sucessful runs example.
-8. The above script directly submits a job to an HPC cluster if ran successfully and also provides a generates run_lichee.sh script and outputs in the patient folder.
-9. The LICHeE requires another script pycloneToLichee.py which generates a sSNV.txt file that is required for running LICHeE. Set the right sizes and error thresholds as needed, see Methods.
-10. Use FishPlot or pairtee if needed to use as an alternate for LICHeE.
+3. Run collect allelic counts to get the reads for mutations, run each sample with this Union list made in step2. See Commands below for further details.
+4. If INDELS are required for clonality analysis, then use bam read counts utility to get the files and then merge it with the allelic count files. Example in demo run. 
+5. Place the results from Step3 and curated copy number files (we used TITAN) in two folders.
+6. Use the masterScript_Pyclone_git.py script and place the absoulte paths to above folders in the variables allelicCounts_path and CNA_dir (with segment/bin-level copy number files and tumor fraction which are in the .params file).
+7. Get all the imputs reads such as samples file with a list of sample and patient IDs, Indel folders, output directory, patient clusters (default Pyclone-VI takes 40) if there are any, and a Yes or No to run LICHeE (if we want only Pyclone-Vi to be run)
+8. Run the masterScript_Pyclone_git.py. See Commands below for further details. This should produce a folder and a pycloneInput.tsv file. The demo has sucessful runs example.
+9. The above script directly submits a job to an HPC cluster if ran successfully and also provides a generates run_lichee.sh script and outputs in the patient folder.
+10. The LICHeE requires another script pycloneToLichee.py which generates a sSNV.txt file that is required for running LICHeE. Set the right sizes and error thresholds as needed, see Methods.
+11. Use downstream anlsysis and scripts to generate the combined files with ANNOVAR and pyclone output files to get gene, pathogenic variants, locus, COSMIC and other such details. 
 
    
 ##Resources
 ## Example: Running of Pyclone-Vi and LICHeE on Sample `19-001`
 This repository includes an example folder, `19-001/`, containing output files generated using the script `masterScript_Pyclone_git.py`.
 Input files and expected results are provided in the `19-001_example/` directory.
+
+## Data types/ dataset Requirements: Running of Pyclone-Vi and LICHeE on Sample `19-001`
+Mutation call files, Copy number solution, tumor fractions , major and minor copy number forr each mutation and allelic read counts (SNVs), annotation information such as gene, locus etc
+
 
 ### Workflow for clonality Analysis
 
