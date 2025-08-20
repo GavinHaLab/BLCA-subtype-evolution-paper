@@ -4,7 +4,7 @@ This directory contains custom scripts for generating, running pyclone-VI and LI
 Original tool github : https://github.com/Roth-Lab/pyclone-vi and https://github.com/viq854/lichee/tree/master please follow their githubs for installation prior to start running the tools. 
 
 ##Requirements
-Installed pyclone-VI and LICHeE, GATK, bam-read co
+Installed pyclone-VI and LICHeE, GATK, bam-read counts, Java, Python. 
 
 ## Overview
 - Steps to run Pyclone-Vi and LICHeE
