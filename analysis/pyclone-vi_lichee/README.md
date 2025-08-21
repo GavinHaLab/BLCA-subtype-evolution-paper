@@ -7,7 +7,7 @@ Original tool github : https://github.com/Roth-Lab/pyclone-vi and https://github
 Installed pyclone-VI and LICHeE, GATK, bam-read counts, Java, Python. 
 
 ## Overview
-- Steps to run Pyclone-Vi and LICHeE
+- Steps to run Pyclone-VI and LICHeE
 - Scripts used in the analysis which are avaiable for reference/use
 
 ## Key Scripts
