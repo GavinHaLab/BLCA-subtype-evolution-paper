@@ -31,7 +31,7 @@ Installed pyclone-VI and LICHeE, GATK, bam-read counts, Java, Python.
    
 ##Resources
 ## Example: Running of Pyclone-Vi and LICHeE on Sample `19-001`
-This repository includes an example folder, `19-001_example/`, containing output files generated using the script `masterScript_Pyclone_git.py`. Also examples for LICHeE inputs and the final Tree that was genererated. 
+This repository includes an example folder, `data/19-001_example_run/`, containing output files generated using the script `masterScript_Pyclone_git.py`. Also examples for LICHeE inputs and the final Tree that was genererated. 
 
 ## Data types/ dataset Requirements: Running of Pyclone-Vi and LICHeE on Sample `19-001`
 Mutation call files, Copy number solution, tumor fractions , major and minor copy number forr each mutation and allelic read counts (SNVs), annotation information such as gene, locus etc
