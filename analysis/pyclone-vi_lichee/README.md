@@ -1,7 +1,7 @@
 # Pyclone-VI and LICHeE Analysis
 
 This directory contains custom scripts for generating, running pyclone-VI and LICHeE tools. 
-Original tool github : https://github.com/Roth-Lab/pyclone-vi and https://github.com/viq854/lichee/tree/master please follow their githubs for installation prior to start running the tools. 
+Original tool github : https://github.com/Roth-Lab/pyclone-vi and https://github.com/viq854/lichee/tree/master please follow their githubs for installation prior to start running the tools and analysis used in the BLCA evolution paper. 
 
 ##Requirements
 Installed pyclone-VI and LICHeE, GATK, bam-read counts, Java, Python. 
