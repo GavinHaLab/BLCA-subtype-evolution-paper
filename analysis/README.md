@@ -14,6 +14,7 @@ The repository is organized into different  folders, each corresponding to one o
 | `metastatic-seeding/`      | Metastatic seeding runs from MACHINA and downstream analysis | Figures 1 and 2 |
 | `mutational-signatures/`      | Mutational signatures analysis and clonality | Figure 4 |
 | `pathogenic_alteration_analysis/`      | Analysis for combining different alteration types such as mutations, CNAs and svs | Figure 3 |
+| `pyclone-vi_lichee/`      | The basis for phylogenetic trees and clonality for mutations | Figures 1, 2 ,3 and 7 |
 | `simple-SV/`      | Consensus and filtering for looking at simple structural variants such as insertions, deletions, duplications, inversions and translocations| Figure 3 |
 | `snRNAseq/`      | Single-cell analysis including clustering and Nichenet | Figure 6 |
 | `svclone/`      | Demo run and downstream analysis for svclone | Figure 3 |
