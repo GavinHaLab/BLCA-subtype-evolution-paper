@@ -7,7 +7,7 @@
 
 ## 🔍 Summary
 
-This repository contains code, data, and results associated with the manuscript on the analysis of clonal and genomic heterogeneity in metastatic bladder cancer. We integrate multi-tumors DNA(WGS/WES) sequencing and cell-free DNA to reconstruct subclonal architectures and infer patterns of tumor evolution across primary and metastatic sites.
+This repository contains code, data, and results associated with a manuscript investigating clonal and genomic heterogeneity in metastatic bladder cancer. We integrate multi-tumor DNA (WGS/WES) sequencing and cell-free DNA to reconstruct subclonal architectures and infer tumor evolutionary patterns across primary and metastatic sites.
 
 The evolution and heterogeneity of lethal metastatic bladder cancer subtypes
 
