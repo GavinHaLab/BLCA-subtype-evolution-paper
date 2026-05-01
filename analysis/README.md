@@ -18,7 +18,6 @@ The repository is organized into different  folders, each corresponding to one o
 | `simple-SV/`      | Consensus and filtering for looking at simple structural variants such as insertions, deletions, duplications, inversions and translocations| Figure 3 |
 | `snRNAseq/`      | Single-cell analysis including clustering and Nichenet | Figure 6 |
 | `svclone/`      | Demo run and downstream analysis for svclone | Figure 3 |
-v
 
 
 > 📌 **Note**: Figures may be supported by multiple scripts and cross-reference data from other folders.
