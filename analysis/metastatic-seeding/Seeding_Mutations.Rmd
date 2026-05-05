@@ -1,0 +1,203 @@
+---
+title: "Seeding_Mutations_Revision"
+output: html_document
+date: "2025-10-07"
+---
+
+```{r message=FALSE, warning=FALSE}
+library(rstatix)
+library(ggpubr)
+library(pals)
+library(lubridate)
+library(survival)
+library(survminer)
+library(ggbeeswarm)
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+```
+
+import
+```{r}
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UC_focal"="#ACD7A0","UCSD"="#43823D","UC_UCSD"="#ACD7A0", "SARC"="#9a6324",
+              "Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220", 
+              "Targeted"="#F8766D", "WGS"="#00BFC4")
+
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+
+seed_col <-c("Autopsy"="#a55662","Surgery"="#62909b","TURBT"="#fc9a70","Autopsy_TURBT" = "burlywood", "pri_to_met"="#B0C199","PM_multi" = "#B0C199","multi_tumor"="navy", "Met_Met"="pink3", "met_to_met" ="pink3", "no_seeding"="snow2" )
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+clinical <- read.csv('/Supplementary_Tables/clinical_data/all_clinical_data_20260413_forSup.csv')
+seeding <- read.csv('/Supplementary_Tables/metastatic_seeding/Metastatic_seeding_summary_withTURBT.csv')
+mut_CP <- read.csv('/Metastatic_Seeding/all_mut_CP_withTURBT.csv')
+mut_annotated <- read.csv('/Supplementary_Tables/genomic_results/SNVs/all_mut_CP_withAnnovar_withTURBT.csv')
+
+sample_info <- read.csv('/Revision_1/Supplementary_tables/all_sequencing_detailed_March2026.csv')
+comut <- read.csv("mutations_cna_sv_in_allDrivergenes_noMixed_filtered_Feb2026_singleOccurrence_CBT.csv")
+sample_CP <- read.csv('/Metastatic_Seeding/sample_cluster_CP_withTURBT.csv')
+
+mut_annotated <- mut_annotated %>%
+  left_join(mut_CP %>% select(patient, cluster_id, cluster_mut_no, cluster_type) %>% distinct())
+
+pri_met <- seeding %>% distinct(patient, patient_seeding_type)
+
+wd <- '/Metastatic_Seeding/withTURBT/'
+sup4 <- '/Revision_1/Supplementary_Figures/Supplementary_Figure4_old3/raw_images/'
+sup5 <- '/Revision_1/Supplementary_Figures/Supplementary_Figure5_old4/raw_images/'
+sup5_SD <- '/Revision_1/Supplementary_Figures/Supplementary_Figure5_old4/source_data/'
+```
+
+
+
+***"For the founder analyses in Figure 3, it would be interesting to compare founder profiles of metastases that did vs didn’t seed additional metastases."***
+
+### Founder profiles of met-met vs pri-met patients ###
+
+get founder all mut types from Fig 3 (using comut df) + graph 
+```{r}
+pats <- sample_info %>% distinct(patient) %>% mutate(pat = substr(patient, 4, 6))
+
+all_found <- comut %>% mutate(pat = substr(sample, 2, 4)) %>% left_join(pats) %>%
+  filter(value %in% c("Founder", "Founder_Amp", "Founder_Del", "Founder_SV")) %>%
+  distinct(patient, category) %>% rename(Gene = category)
+
+all_found <- pri_met %>% left_join(all_found) %>% select(Gene, patient_seeding_type) %>% table() %>% as.data.frame() %>%
+  mutate(seeding_type_2 = case_match(patient_seeding_type,"met_to_met"~"met_to_met", .default = "PM_multi")) %>%
+  select(-patient_seeding_type) %>%
+  group_by(Gene, seeding_type_2) %>% summarise(Freq = sum(Freq), .groups = "drop") %>%
+  mutate(proportion = case_when(seeding_type_2=="met_to_met"~Freq/9, 
+                                seeding_type_2 == "PM_multi"~Freq/7))
+
+all_found_wide <- all_found %>% select(-proportion) %>%
+  pivot_wider(names_from = seeding_type_2, values_from = Freq) %>%
+  mutate(total = met_to_met + PM_multi, 
+         prop_MM = met_to_met/9, 
+         prop_PM_multi = PM_multi/7)
+order2 <- all_found_wide %>% filter(total>1) %>% arrange(desc(met_to_met), PM_multi) %>% pull(Gene)
+
+df_sd <- all_found %>%
+  filter(Gene %in% order2) %>% mutate(Gene = factor(Gene, levels = order2))
+write.csv(df_sd, paste0(sup5_SD, "S5F_Founder_Alts_bySeeding.csv"), row.names = F)
+
+all_found %>%
+  filter(Gene %in% order2) %>% mutate(Gene = factor(Gene, levels = order2)) %>%
+  ggplot(aes(x=Gene, y= proportion)) +
+    geom_bar(aes(fill=seeding_type_2), position = position_dodge(width=0.9), stat="identity")+
+    scale_fill_manual(values=seed_col, labels=c("Met-to-Met", "Pri-to-Met/Multi-tumor")) +
+    geom_text(aes(label=Freq, group=seeding_type_2), position = position_dodge(width=0.9), vjust = -0.3, size=3) +
+    theme(legend.position = "none") +
+    theme(axis.text.x = element_text(angle=70, hjust=1, vjust = 1)) +
+    labs(x=NULL, y="Proportion of Patients", fill="Seeding Type", title="Founder profile of BLCA drivers", caption = "any founder alteration, Fig3")
+ggsave(paste0(wd, "Founder_anyAlteration_bySeedingType2.pdf"), width=10, height=4)
+ggsave(paste0(sup5, "Founder_anyAlteration_bySeedingType2_unannotated.pdf"), width=12, height=3)
+```
+
+stats
+```{r}
+#pri-met + multi vs met-met
+df <- data.frame()
+for(g in unique(order2)){
+  MM <- all_found %>% filter(Gene == g, seeding_type_2=="met_to_met") %>% pull(Freq)
+  PM <- all_found %>% filter(Gene == g, seeding_type_2=="PM_multi") %>% pull(Freq)
+  not_MM <- 9-MM
+  not_PM <- 7-PM
+  
+  m <- matrix(c(MM, PM,not_MM, not_PM), nrow=2)
+  p <- fisher_test(m)$p
+  df <- rbind(df, data.frame(gene = g, fisher_p = p))
+  
+  print(paste0(g, ": ", p))
+}
+
+```
+
+
+*** it would be reasonable to assume that the primary may resemble metastases to greater/lesser extent depending on when the bladder tumor was harvested/analyzed *** 
+
+### Clonal composition by primary source ###
+
+number of shared clones per tumor
+```{r}
+df <- sample_CP %>% 
+  # how many shared clones are in each sample
+  filter(cellular_prevalence>0.03, cluster_type=="Shared") %>%
+  group_by(sample_id) %>% 
+  summarise(patient = unique(patient), 
+            n_clones = n(), .groups = "drop") %>%
+  
+  # average number of shared clones for mets vs pri in patient
+  left_join(sample_info %>% select(dnaseq_sampleName, tissue_type, source), by=c("sample_id"="dnaseq_sampleName")) %>%
+  mutate(tissue_type = case_when(tissue_type=="Primary_TURBT"~"Primary", 
+                                 sample_id =="16-079_Primary-FFPE"~"Primary", .default = tissue_type), 
+         source = case_when(sample_id =="16-079_Primary-FFPE"~"Autopsy", .default = source), 
+         type_source = paste0(tissue_type, "_", source)) %>%
+  group_by(patient, type_source) %>%
+  summarise(avg_clones = mean(n_clones),
+            .groups = "drop") %>%
+  
+  # ratio of shared clones in mets vs pri for patient
+  group_by(patient) %>%
+  mutate(met_pri_ratio = avg_clones[type_source=="Met_Autopsy"]/avg_clones, 
+         met_pri_diff = avg_clones[type_source=="Met_Autopsy"] - avg_clones) %>% ungroup() %>%
+  filter(grepl("Primary", type_source)) %>%
+  mutate(pri_source = sub("Primary_","", type_source), 
+         pri_source = factor(pri_source, levels=c("TURBT", "Surgery", "Autopsy"))) %>% 
+  select(patient, pri_source, avg_clones, met_pri_ratio)
+write.csv(df, '/Revision_1/Supplementary_Figures/Supplementary_Figure7_NEW/source_data/S7D_Ratio_Shared_clones_byPriSource.csv', row.names = F)
+
+stat.test <- df %>%
+  wilcox_test(met_pri_ratio~pri_source) %>%
+  add_xy_position()
+df %>%
+  ggplot(aes(x=pri_source, y=met_pri_ratio)) +
+    geom_boxplot(outlier.shape = NA, aes(fill=pri_source), show.legend = F, alpha=1) +
+    geom_quasirandom(size=3, aes(fill=patient), shape=21) +
+    scale_fill_manual(values=c(seed_col, pat_col), breaks=names(pat_col), name="Patient") +
+    stat_pvalue_manual(stat.test, label="p", tip.length = 0) +
+    labs(caption="wilcox pval", y = "Ratio of shared clones in met : pri")
+ggsave(paste0(sup4, "Shared_clones_ratio_byPriSource_boxplot.pdf"), width=4, height=4)
+```
+
+CP of shared clones
+```{r}
+#any shared clone
+df <- sample_CP %>% filter(cluster_type=="Shared") %>%
+  left_join(sample_info %>% select(dnaseq_sampleName, tissue_type, source), by=c("sample_id"="dnaseq_sampleName")) %>%
+  mutate(tissue_type = case_when(tissue_type=="Primary_TURBT"~"Primary", 
+                                 sample_id =="16-079_Primary-FFPE"~"Primary", .default = tissue_type), 
+         source = case_when(sample_id =="16-079_Primary-FFPE"~"Autopsy", .default = source)) %>%
+  group_by(patient, cluster_id) %>%
+  mutate(tissue_source = paste0(tissue_type, "_", source)) %>% ungroup() %>%
+  select(-Pushpas_names) %>%
+  group_by(patient, cluster_id, tissue_source) %>%
+  summarise(avg_CP = mean(cellular_prevalence), 
+            .groups = "drop")  %>%
+  pivot_wider(names_from = tissue_source, values_from = avg_CP) %>%
+  pivot_longer(cols=Primary_Surgery:Primary_TURBT, names_to = "Pri_type", values_to = "pri_avgCP") %>%
+  filter(!is.na(pri_avgCP)) %>%
+  mutate(avg_CP_diff_met_pri = Met_Autopsy-pri_avgCP, 
+         abs_avg_CP_diff_met_pri = abs(avg_CP_diff_met_pri), 
+         source = sub("Primary_", "", Pri_type), 
+         source = factor(source, levels=c("TURBT", "Surgery", "Autopsy"))) %>%
+  select(patient, cluster_id, Pri_type, source, Met_Autopsy, pri_avgCP, avg_CP_diff_met_pri, abs_avg_CP_diff_met_pri) %>%
+  rename(met_avgCP = Met_Autopsy)
+write.csv(df, '/Revision_1/Supplementary_Figures/Supplementary_Figure7_NEW/source_data/S7E_CPdiff_byPriSource.csv', row.names = F)
+
+df %>%
+  ggplot(aes(x=source, y=abs_avg_CP_diff_met_pri)) +
+    geom_boxplot(outlier.shape = NA, aes(fill=source), show.legend = F, alpha=1) +
+    geom_quasirandom(size=3, aes(fill=patient), shape=21) +
+    scale_fill_manual(values=c(seed_col, pat_col), breaks=names(pat_col), name="Patient") +
+    labs(caption="wilcox pval", y = "|Difference in shared clone CP|", subtitle="any shared clone")
+ggsave(paste0(sup4, "Shared_clones_absCPdiff_byPriSource_boxplot_nostats.pdf"), width=4.4, height=4)
+
+#any shared clone LME
+model <- lmer(data=df %>% mutate(source = factor(source, levels=c("Surgery", "TURBT", "Autopsy"))), formula = abs_avg_CP_diff_met_pri~source + (1|patient))
+summary(model) #surg vs TURBT = 0.715846    Autopsy vs TURBT = 0.743126     surg vs autopsy = 0.498
+```

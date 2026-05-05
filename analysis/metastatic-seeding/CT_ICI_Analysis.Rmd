@@ -1,0 +1,274 @@
+---
+title: "CT_ICI_Analysis"
+output: html_document
+date: "2026-01-22"
+---
+
+```{r message=FALSE, warning=FALSE}
+library(ggpubr)
+library(rstatix)
+library(pals)
+library(ggbeeswarm)
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+```
+
+set up
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+site_col <- c("Liver"="#B668A9", "Lung"="#63596D", "Primary"="#750F2C","Bladder"="#750F2C", "Other"="#C2D7EF", "LN"="#F8ADA7", "Lymph"="#F8ADA7", "Adrenal"="#bfef45", "Omentum"="#000075")
+pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
+  setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
+ICI_col <- c("snow3", "orange", "skyblue", "#ffe119") %>% setNames(c("no_ICI", "before_ICI", "after_ICI", "founder_before_ICI"))
+seed_col <- c("monoclonal"="palegreen2", "polyclonal_monophyletic"="plum", "monophyletic"="plum", "polyclonal_polyphyletic"="maroon", "polyphyletic"="maroon", "multi_tumor"="navy",  "multi_tumor_polyclonal_polyphyletic"="navy")
+
+wd <- '/CT Imaging/CT_ICI_Analysis/'
+figs <- '/Main_Figures/Figure2/rawImages/withTURBT/'
+fig_source <- '/Main_Figures/Figure2/source_data/'
+sup_fig <- '/Supplementary_Figures/Supplementary_Figure2/raw_images/'
+sup_source <- '/Revision_1/Supplementary_Figures/Supplementary_Figure3_old2/source_data/'
+```
+
+import
+```{r}
+CT_timing <- read.csv('/CT Imaging/CT_scan_list_withIO.csv')
+
+sample_CP <- read.csv('/Supplementary_Tables/genomic_results/SNVs/sample_cluster_CP_withTURBT.csv')
+allmut <- read.csv('/Supplementary_Tables/genomic_results/SNVs/all_mut_CP_withAnnovar_withTURBT.csv')
+
+sample_info <- read.csv('/Supplementary_Tables/cohort_description_details/all_sequencing_detailed_March2026.csv')
+
+#clones_perMigration_old <- read.csv('/CT Imaging/CT_ICI_Analysis/met_clones_perMigration.csv')
+clones_perMigration <- read.csv('/Metastatic_Seeding/Metastatic_seeding_summary_withTURBT.csv')
+
+seeding_source <- read.csv('/CT Imaging/CT_ICI_Analysis/Seeding_source_perCluster.csv')
+```
+
+combine & clean into df
+```{r}
+#summarize seeding per migration into seeding per met
+clones_perMet <- clones_perMigration %>%
+  left_join(sample_info %>% distinct(patient, block_letter, dnaseq_sampleName)) %>%
+  group_by(dnaseq_sampleName) %>%
+  mutate(seeding_clones = sum(seeding_clones),
+         seeding_type = paste(seeding_type, collapse = "_"),
+         seeding_source = paste(seeding_source, collapse = "_")) %>%
+  ungroup() %>% distinct()
+
+#per patient summary of whether the patient got ICI + has info on mets before/after ICI
+pat_ICI <- CT_timing %>% distinct(TAN_id, IO, IO_duration) %>%
+  mutate(IO = ifelse(is.na(IO), "no_IO", IO),
+         pat_IO_timing = case_when(TAN_id %in% c("17-071", "19-001", "19-007")~"ICI_too_short",
+                                 TAN_id %in% c("16-097", "18-065", "18-101")~"all_mets_before_ICI",
+                                 IO == "no_IO"~"no_IO",
+                                 TAN_id %in% c("16-070", "17-030", "17-047", "19-022", "19-037", "19-044")~"mets_before_after_ICI",
+                                 TAN_id %in% c("16-079", "18-120")~"no_preICI_scan"))
+
+#expand above to state which mets were seeded before/after ICI (manual for patients with both before/after)
+sample_ICI <- sample_info %>% select(patient, block_letter, tumor_site, tumor_site_group, has_DNAseq, dnaseq_sampleName, tumor_names_seeding_Fig1_SuppFig1) %>%
+  filter(has_DNAseq=="yes", !tumor_site_group %in% c("Primary", "Normal", "Primary_TURBT")) %>%
+  left_join(pat_ICI, by=c("patient"="TAN_id"))
+b <- "before_ICI"
+a <- "after_ICI"
+df <- sample_ICI %>% filter(pat_IO_timing =="mets_before_after_ICI") %>% distinct(patient, tumor_site, dnaseq_sampleName) %>%
+  arrange(patient, tumor_site) %>%
+  mutate(met_timing = c(b,b,b,a,a, #16-070 periA LN, liver, liver, mes LN, pancreas
+                        a,a,b,a, #17-030 adr, ab, liver, colon
+                        a,b, #17-047 atrial, hilar LN
+                        a,b,a, #19-022 adrenal, lung, liver
+                        a,a,b,a,a, #19-037 liver, neph, pancreas, LN, liver
+                        a,b,b,a,a #19-044 liver, pelvic, LN, lung, liver
+                        ))
+#expand above to state which mets were seeded before/after ICI (add for no ICI/only before ICI patients)
+sample_ICI <- sample_ICI %>% left_join(df) %>%
+  mutate(met_timing = case_when(pat_IO_timing %in% c("no_preICI_scan", "ICI_too_short")~NA,
+                                pat_IO_timing == "no_IO"~"no_ICI",
+                                pat_IO_timing == "all_mets_before_ICI"~"before_ICI",
+                                .default = met_timing)) %>%
+  left_join(sample_info %>% select(patient, block_letter, hist_patient, hist_sample)) %>%
+  left_join(clones_perMet %>% select(-tumor_site, -Name_in_Fig1, -dnaseq_sampleName, -Histology), by=join_by(patient, block_letter)) %>%
+  select(-has_DNAseq) %>%
+  mutate(patient_seeding_type = case_when(patient %in% c("17-047", "18-101","18-120", "19-044")~"noPrimary_noSeeding", .default=patient_seeding_type))
+
+#add clonality info for each tumor
+sample_cluster_ICI <- sample_ICI %>%
+  left_join(sample_CP, by=c("dnaseq_sampleName"="sample_id", "patient"="patient", "tumor_names_seeding_Fig1_SuppFig1"="Pushpas_names")) %>%
+  select(-tumor_names_seeding_Fig1_SuppFig1)
+ 
+sup_table <- '/Supplementary_Tables/metastatic_seeding/'
+# write.csv(sample_ICI, paste0(sup_table, "met_timing_before_after_ICI.csv"), row.names = F) 
+# write.csv(sample_cluster_ICI, paste0(sup_table, "met_timing_ICI_clusterCP.csv"), row.names = F)
+```
+
+read in cleaned df
+```{r}
+sample_ICI <- read.csv(paste0(wd, "met_timing_before_after_ICI.csv")) 
+sample_cluster_ICI <- read.csv(paste0(wd, "met_timing_ICI_clusterCP.csv"))
+```
+
+### ANALYSIS ###
+
+met location from sample_ICI (Sup Fig 3G)
+```{r}
+#graph no_ICI separate from before/after
+df <- sample_ICI %>%
+  filter(!is.na(met_timing)) %>%
+  mutate(met_timing = factor(met_timing, levels=c("no_ICI", "before_ICI", "after_ICI"))) %>%
+  select(tumor_site_group, met_timing) %>% table() %>% as.data.frame()
+df_matrix <- df %>% pivot_wider(names_from = tumor_site_group, values_from = Freq) %>% as.data.frame() %>% `rownames<-`(c("no_ICI", "before_ICI", "after_ICI")) %>% select(-met_timing)
+#write.csv(df, paste0(sup_source, "S3G_MetSite_byICItiming.csv"), row.names = F)
+
+fisher_test(df_matrix)
+fisher_test(df_matrix[2:3,])
+
+
+df %>%
+  ggplot(aes(x=met_timing,y=Freq, fill=tumor_site_group)) +
+    geom_bar(stat="identity", position = "fill") +
+    # geom_text(aes(label = Freq), color="black", size=3,
+    #           position = position_fill(vjust = 0.5)) +
+    scale_fill_manual(values=site_col) +
+    labs(x="Met visible before/after ICI", y="Prop of Mets", fill="Met Site", caption="fisher p=0.51")
+#ggsave(paste0(wd, "Met_Site_byICI_timing_barFill_3groups.pdf"), width=4, height=4)
+#ggsave(paste0(sup_fig, "Met_Site_byICI_timing_barFill_3groups_simple.pdf"), width=4, height=3)
+```
+
+number of migrating clones (Sup Fig 3F)
+```{r}
+df <- sample_ICI %>%  
+  filter(!is.na(met_timing), !is.na(seeding_clones)) %>%
+  filter(met_timing %in% c("before_ICI", "after_ICI")) %>%
+  mutate(met_timing = factor(met_timing, levels=c("before_ICI", "after_ICI"))) %>%
+  select(-Pushpas_names, -site_near, -Name_in_Fig1, -IO_duration)
+#write.csv(df, paste0(sup_source, "S3F_SeedingClones_byICItiming.csv"), row.names = F)
+
+model <- lmer(data = df, seeding_clones~met_timing + (1|patient))
+p2 <- round(summary(model)$coefficients[2,5], 3) #0.113
+
+
+#visualize per patient (any before and after)
+df %>%
+  ggplot(aes(x=met_timing, y=seeding_clones)) +
+    geom_boxplot(outlier.shape = NA, aes(fill=met_timing), show.legend = F) +
+    geom_quasirandom(size=4, shape=21,alpha=0.7, aes(fill=patient)) +
+    scale_fill_manual(values=c(ICI_col, pat_col), name="Patient", breaks=names(pat_col)) +
+    labs(x="Met visible before/after ICI", y="# clones in seeding event", caption=paste0("wilcox p shown; LME p=",p2),title="# seeding clones", subtitle = "Any before + after mets")
+#ggsave(paste0(wd, "Num_clones_perMigration_byICI_timing_boxplot_anyBeforeAfter.pdf"), width=4, height=4)
+#ggsave(paste0(sup_fig, "Num_clones_perMigration_byICI_timing_boxplot_anyBeforeAfter.pdf"), width=3.5, height=5)
+
+```
+
+seeding type (Fig 2F, Sup Fig 3E)
+```{r}
+df <- sample_ICI %>%
+  filter(!is.na(seeding_type),
+         pat_IO_timing == "mets_before_after_ICI") %>%
+  mutate(met_timing = factor(met_timing, levels=c("before_ICI", "after_ICI"))) %>%
+  select(-Pushpas_names, -IO_duration, -site_near, -Name_in_Fig1)
+#write.csv(df, paste0(fig_source, "2F_SeedingType_byICItiming.csv"), row.names = F)
+
+#fisher test
+p <- df %>%
+  select(met_timing, seeding_type) %>% table() %>% as.data.frame() %>%
+  pivot_wider(names_from = seeding_type, values_from = Freq) %>%
+  as.data.frame() %>% `rownames<-`(c("before_ICI", "after_ICI")) %>% select(-met_timing) %>%
+  fisher_test() %>% pull(p)
+
+#bar faceted (Sup Fig 3E)
+df %>%
+  ggplot(aes(x=met_timing, fill=seeding_type)) +
+    geom_bar(stat="count", position = "stack") +
+    scale_fill_manual(values=seed_col) +
+    scale_y_continuous(breaks=seq(0,12,3)) + 
+    labs(caption=paste0("fisher p=",p)) +
+    facet_wrap(~patient,nrow=1)
+#ggsave(paste0(wd, "SeedingType_byICI_timing_Bar_Faceted_pairedBeforeAfter.pdf"), width=6, height=4)
+#ggsave(paste0(sup_fig, "SeedingType_byICI_timing_Bar_Faceted_pairedBeforeAfter.pdf"), width=6, height=4)
+
+
+#bar simple - paired before/after (Fig 2F)
+df %>%
+  ggplot(aes(x=met_timing, fill=seeding_type)) +
+    geom_bar(stat="count", position = "stack") +
+    scale_fill_manual(values=seed_col) +
+    scale_y_continuous(breaks=seq(0,12,3)) + 
+    labs(caption=paste0("fisher p=",p))
+#ggsave(paste0(wd, "SeedingType_byICI_timing_Bar_pairedBeforeAfter.pdf"), width=4, height=4)
+#ggsave(paste0(sup_fig, "SeedingType_byICI_timing_Bar_pairedBeforeAfter.pdf"), width=4, height=4)
+```
+
+number of clones in met - not used in paper but referred to
+```{r}
+df <- sample_cluster_ICI %>%
+  filter(!is.na(met_timing), !is.na(cluster_type), cellular_prevalence>0.03) %>%
+  group_by(patient, dnaseq_sampleName) %>%
+  mutate(n_clones = n(),
+         avg_CP_clones = mean(cellular_prevalence)) %>% ungroup() %>%
+  distinct(patient, tumor_site, tumor_site_group, dnaseq_sampleName, IO, IO_duration, pat_IO_timing, met_timing, n_clones, avg_CP_clones) %>%
+  mutate(met_timing = factor(met_timing, levels=c("no_ICI", "before_ICI", "after_ICI")))
+
+
+#all patients before/after - LME (any before/after)
+model <- lmer(data = df %>% filter(met_timing %in% c("before_ICI", "after_ICI")), n_clones~met_timing + (1|patient))
+p <- round(summary(model)$coefficients[2,5], 3) #0.464
+df %>%
+  filter(met_timing %in% c("before_ICI", "after_ICI")) %>%
+  ggplot(aes(x=met_timing, y=n_clones)) +
+    geom_boxplot(outlier.shape = NA, aes(fill=met_timing), show.legend = F) +
+    geom_quasirandom(size=4, shape=21, aes(fill=patient), alpha=0.75) +
+    scale_fill_manual(values=c(ICI_col, pat_col), breaks=names(pat_col), name="Patient") +
+    labs(x="Met visible before/after ICI", y="# clones in met", caption=paste0("LME p=",p))
+#ggsave(paste0(wd, "Num_clones_perMet_byICI_timing_boxplot_anyBeforeAfter.pdf"), width=4, height=4)
+#ggsave(paste0(sup_fig, "Num_clones_perMet_byICI_timing_boxplot_anyBeforeAfter.pdf"), width=3.5, height=5)
+```
+
+
+CP of clones in before/after tumors (each clone - LME) **Fig 2G**
+```{r}
+#remove founder, only show clusters in tumors (not <0.03)
+df <- sample_cluster_ICI %>% filter(cluster_type!="Founder", cellular_prevalence>0.03) %>%
+  mutate(met_timing = factor(met_timing, levels=c("no_ICI", "before_ICI", "after_ICI"))) %>%
+  filter(pat_IO_timing=="mets_before_after_ICI")
+
+
+#matched
+model <- lmer(data = df  %>% mutate(pat_cluster = paste0(patient,"_", cluster_id)), cellular_prevalence~met_timing + (1|patient) + (1|pat_cluster))
+p <- round(summary(model)$coefficients[2,5], 3) #0.022
+df %>% 
+  ggplot(aes(x=met_timing, y=cellular_prevalence)) +
+    geom_boxplot(outlier.shape = NA, aes(fill=met_timing), show.legend = F) +
+    geom_quasirandom(size=4, shape=21, aes(fill=patient)) +
+    scale_fill_manual(values=c(ICI_col, pat_col), name="Patient", breaks=names(pat_col)) +
+    coord_cartesian(ylim=c(0,1)) +
+    labs(x="Met visible before/after ICI", y="CP per clone",title="CP in non-founder clones", subtitle="point=clone, pats with before/after mets", caption=paste0("LME (CP~time + 1|pat + 1|pat_clust) p=",p))
+#ggsave(paste0(wd, "CP_allClones_matched_beforeAfter_ICI.pdf"), width=4, height=6)
+#ggsave(paste0(figs, "CP_allClones_matched_beforeAfter_ICI.pdf"), width=4, height=6)
+#write.csv(df , '/Main_Figures/Figure2/source_data/2G_CP_allClones_matched_beforeAfter_ICI.csv', row.names = F)
+
+```
+
+
+sup table (number clones each met, CP each clone, number seeding clones per met)
+```{r}
+n_clones_perMet <- sample_cluster_ICI %>%
+  filter(!is.na(cluster_type), cellular_prevalence>0.03) %>%
+  group_by(patient, dnaseq_sampleName) %>%
+  mutate(n_clones_inMet = n()) %>% ungroup() %>%
+  distinct(patient, dnaseq_sampleName, n_clones_inMet)
+
+df <- sample_cluster_ICI %>% left_join(n_clones_perMet)
+write.csv(df, '/Supplementary_Tables/metastatic_seeding/met_timing_ICI_clusterCP_withNClones.csv', row.names = F)
+
+df <- sample_ICI %>% left_join(n_clones_perMet)
+write.csv(df, '/Supplementary_Tables/metastatic_seeding/met_timing_before_after_ICI_withNClones.csv', row.names = F)
+```
+
+
+

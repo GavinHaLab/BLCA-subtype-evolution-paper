@@ -12,6 +12,7 @@ library(lubridate)
 library(survival)
 library(survminer)
 library(forestmodel)
+library(ggbeeswarm)
 library(tidyverse)
 ```
 
@@ -22,34 +23,38 @@ hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UC_focal"="#ACD7A0"
               "Targeted"="#F8766D", "WGS"="#00BFC4")
 pat_col <-c('#e6194b','#3cb44b','#ffe119','#fabed4','#4363d8','#f58231','#42d4f4','#911eb4','#f032e6','#bfef45','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9') %>%
   setNames(c('15-109','16-070','16-097','17-026','17-030','17-071','18-101','18-120','19-007','19-044','15-108','16-079','17-020','17-047','18-016','18-065','19-001','19-004','19-022','19-037'))
-seed_col <- c("monoclonal"="palegreen2", "polyclonal_monophyletic"="plum", "monophyletic"="plum", "polyclonal_polyphyletic"="maroon", "polyphyletic"="maroon")
+seed_col <- c("monoclonal"="palegreen2", "polyclonal_monophyletic"="plum", "monophyletic"="plum", "polyclonal_polyphyletic"="maroon", "polyphyletic"="maroon", "multi_tumor"="navy")
 
 theme_set(theme_classic() + 
             theme(axis.text = element_text(color="black"),
                   rect = element_rect(fill = NULL),
                   axis.ticks = element_line(color="black")))
 
-clinical <- read.csv('Supplementary_Tables/clinical_data/all_clinical_data_updated.csv')
-seeding <- read.csv('Metastatic_Seeding/Metastatic_seeding_summary.csv')
-sample_CP <- read_csv('Metastatic_Seeding/sample_cluster_CP.csv', show_col_types = F)
+clinical <- read.csv('Supplementary_Tables/clinical_data/all_clinical_data_20260413_forSup.csv')
 
-wd <- 'Metastatic_Seeding/'
-figs <- "Main_Figures/Figure2/rawImages/"
+
+seeding <- read.csv('Supplementary_Tables/Metastatic_Seeding/Metastatic_seeding_summary_withTURBT.csv')
+sample_CP <- read_csv('Supplementary_Tables/genomic_results/SNVs/sample_cluster_CP_withTURBT.csv', show_col_types = F)
+sample_info <- read.csv('Revision_1/Supplementary_tables/all_sequencing_detailed_March2026.csv')
+
+wd <- '/Metastatic_Seeding/withTURBT/'
+figs <- "Main_Figures/Figure2/rawImages/withTURBT/"
+supp <- 'Revision_1/Supplementary_Figures/Supplementary_Figure3_old2/raw_images/'
+SD_main <- "Main_Figures/Figure2/source_data/"
+SD_sup <- 'Revision_1/Supplementary_Figures/Supplementary_Figure3_old2/source_data/'
 ```
 
-stacked bar graphs
+Fig 2D: stacked bar pri vs met source
 ```{r}
-#FIG 2E
-seeding %>%
-  group_by(type) %>%
-  summarise(monoclonal=sum(monoclonal), 
-            polyclonal_monophyletic=sum(polyclonal_monophyletic), 
-            polyclonal_polyphyletic=sum(polyclonal_polyphyletic), 
-            multi_tumor=sum(multi_tumor)) %>%
-  pivot_longer(cols=monoclonal:multi_tumor, names_to = "seeding_type", values_to = "freq") %>%
-  mutate(type = factor(type, levels=c("Primary", "Met")), 
-         seeding_type = factor(seeding_type, levels=c("monoclonal", "polyclonal_monophyletic", "polyclonal_polyphyletic", "multi_tumor"))) %>%
-  ggplot(aes(x=type, y=freq, fill=seeding_type)) +
+df <- seeding %>%
+  group_by(seeding_source, seeding_type) %>%
+  summarise(freq=n()) %>%
+  mutate(seeding_source = factor(seeding_source, levels=c("primary", "met")), 
+         seeding_type = factor(seeding_type, levels=c("monoclonal", "polyclonal_monophyletic", "polyclonal_polyphyletic", "multi_tumor"))) 
+write.csv(df, paste0(SD_main, "2D_seeding_byPriMet.csv"), row.names = F)
+
+df %>%
+  ggplot(aes(x=seeding_source, y=freq, fill=seeding_type)) +
     geom_bar(stat="identity", position = "stack") +
     theme(legend.position = "none") +
     scale_fill_manual(values=c("palegreen2", "plum", "maroon", "navy")) +
@@ -57,83 +62,75 @@ seeding %>%
 ggsave(paste0(figs, "Seeding_summary.pdf"), width=1.5, height=3)
 ggsave(paste0(wd, "Seeding_summary.pdf"), width=4, height=3)
 
-#FIG 2F
-seeding %>%
-  group_by(Histology) %>%
-  summarise(monoclonal=sum(monoclonal), 
-            polyclonal_monophyletic=sum(polyclonal_monophyletic), 
-            polyclonal_polyphyletic=sum(polyclonal_polyphyletic), 
-            multi_tumor=sum(multi_tumor)) %>%
-  pivot_longer(cols=monoclonal:multi_tumor, names_to = "seeding_type", values_to = "freq") %>%
-  mutate(Histology = factor(Histology, levels=c("UC",  "UCSD", "PUC","NE", "SARC")), 
-         seeding_type = factor(seeding_type, levels=c("monoclonal", "polyclonal_monophyletic", "polyclonal_polyphyletic", "multi_tumor"))) %>%
-  ggplot(aes(x=Histology, y=freq, fill=seeding_type)) +
-    geom_bar(stat="identity", position = "fill") +
-    scale_fill_manual(values=c("lightgreen", "plum", "maroon", "navy")) +
-    labs(x="Histology", y="Seeding events", fill="Seeding Type")
-ggsave(paste0(wd, "Seeding_summary_byHistology.pdf"), width=6, height=3)
-ggsave(paste0(figs, "Seeding_summary_byHistology.pdf"), width=5, height=3)
+#fisher exact
+df_test <- df %>% 
+  mutate(seeding_type = case_match(seeding_type, "polyclonal_polyphyletic"~"polyclonal_polyphyletic", .default = "not_PP")) %>%
+  group_by(seeding_source, seeding_type) %>%
+  summarise(freq=sum(freq)) %>%
+  pivot_wider(names_from = seeding_type, values_from = freq) %>%
+  as.data.frame() %>% `rownames<-`(c("primary", "met")) %>% select(-seeding_source)
+fisher.test(df_test) #p.val = 0.03789
+df_test %>%
+  mutate(total = not_PP + polyclonal_polyphyletic, 
+         PP_prop = polyclonal_polyphyletic/total)
 ```
 
-fisher exact tests (poly_poly vs other)
+Fig 2E: stacked bar by histology
 ```{r}
-#primary vs met
 df <- seeding %>%
-  mutate(other = polyclonal_monophyletic + monoclonal+ multi_tumor) %>%
-  group_by(type) %>%
-  summarise(other=sum(other), 
-            polyclonal_polyphyletic= sum(polyclonal_polyphyletic)) %>% as.data.frame()
-plot_df <- df %>% pivot_longer(cols=other:polyclonal_polyphyletic, names_to = "clonality", values_to = "freq")
-plot_df %>% 
-  ggplot(aes(x=type, y=freq, fill=clonality)) +
-    geom_bar(stat="identity", position = "fill")
-rownames(df) <- df$type
-df$type <- NULL
-fisher.test(df) #p.val = 0.01824
+  group_by(Histology, seeding_type) %>%
+  summarise(freq=n()) %>%
+  mutate(Histology = factor(Histology, levels=c("UC", "UCSD", "PUC", "NE", "SARC")), 
+         seeding_type = factor(seeding_type, levels=c("monoclonal", "polyclonal_monophyletic", "polyclonal_polyphyletic", "multi_tumor"))) 
+write.csv(df, paste0(SD_main, "2E_seeding_byHist.csv"), row.names = F)
 
-#UC vs PUC
-df <- seeding %>% filter(Histology %in% c("UC", "PUC")) %>%
-  mutate(other = polyclonal_monophyletic + monoclonal+ multi_tumor, 
-         complex = polyclonal_polyphyletic ) %>%
-  group_by(Histology) %>%
-  summarise(other= sum(other), 
-            complex=sum(complex)) %>% as.data.frame()
-rownames(df) <- df$Histology
-df$Histology <- NULL
-fisher.test(df) #p.val = 0.04191
+df %>%
+  ggplot(aes(x=Histology, y=freq, fill=seeding_type)) +
+    geom_bar(stat="identity", position = "fill") +
+    theme(legend.position = "none") +
+    scale_fill_manual(values=c("palegreen2", "plum", "maroon", "navy")) +
+    labs(x="Seeding from", y="# seeding events", fill="Seeding Type")
+ggsave(paste0(figs, "Seeding_summary_byHistology.pdf"), width=5, height=3)
+ggsave(paste0(wd, "Seeding_summary_byHistology.pdf"), width=5, height=3)
 
-#UC vs UCSD
-df <- seeding %>% filter(Histology %in% c("UC", "UCSD")) %>% 
-  mutate(other = polyclonal_monophyletic + monoclonal+ multi_tumor, 
-         complex = polyclonal_polyphyletic ) %>%
-  group_by(Histology) %>%
-  summarise(other= sum(other), 
-            complex=sum(complex)) %>% as.data.frame()
-rownames(df) <- df$Histology
-df$Histology <- NULL
-fisher.test(df) #p.val = 0.007912
-
-#UC vs NE
-df <- seeding %>% filter(Histology %in% c("UC", "NE")) %>% 
-  mutate(other = polyclonal_monophyletic + monoclonal+ multi_tumor, 
-         complex = polyclonal_polyphyletic ) %>%
-  group_by(Histology) %>%
-  summarise(other= sum(other), 
-            complex=sum(complex)) %>% as.data.frame()
-rownames(df) <- df$Histology
-df$Histology <- NULL
-fisher.test(df) #p.val = 0.01449
-
-#UC vs SARC
-df <- seeding %>% filter(Histology %in% c("UC", "SARC")) %>% 
-  mutate(other = polyclonal_monophyletic + monoclonal+ multi_tumor, 
-         complex = polyclonal_polyphyletic ) %>%
-  group_by(Histology) %>%
-  summarise(other= sum(other), 
-            complex=sum(complex)) %>% as.data.frame()
-rownames(df) <- df$Histology
-df$Histology <- NULL
-fisher.test(df) #p.val = 0.003953
+#fisher exact
+## UC vs UCSD
+df_test <- df %>% 
+  filter(Histology %in% c("UC", "UCSD")) %>%
+  mutate(seeding_type = case_match(seeding_type, "polyclonal_polyphyletic"~"polyclonal_polyphyletic", .default = "not_PP")) %>%
+  group_by(Histology, seeding_type) %>%
+  summarise(freq=sum(freq)) %>%
+  pivot_wider(names_from = seeding_type, values_from = freq) %>%
+  as.data.frame() %>% `rownames<-`(c("UC", "UCSD")) %>% select(-Histology)
+fisher.test(df_test) #p.val = 0.003056
+## UC vs PUC
+df_test <- df %>% 
+  filter(Histology %in% c("UC", "PUC")) %>%
+  mutate(seeding_type = case_match(seeding_type, "polyclonal_polyphyletic"~"polyclonal_polyphyletic", .default = "not_PP")) %>%
+  group_by(Histology, seeding_type) %>%
+  summarise(freq=sum(freq)) %>%
+  pivot_wider(names_from = seeding_type, values_from = freq) %>%
+  as.data.frame() %>% `rownames<-`(c("UC", "PUC")) %>% select(-Histology)
+fisher.test(df_test) #p.val = 0.04191
+## UC vs NE
+df_test <- df %>% 
+  filter(Histology %in% c("UC", "NE")) %>%
+  mutate(seeding_type = case_match(seeding_type, "polyclonal_polyphyletic"~"polyclonal_polyphyletic", .default = "not_PP")) %>%
+  group_by(Histology, seeding_type) %>%
+  summarise(freq=sum(freq)) %>%
+  pivot_wider(names_from = seeding_type, values_from = freq) %>%
+  as.data.frame() %>% `rownames<-`(c("UC", "NE")) %>% select(-Histology)
+fisher.test(df_test) #p.val = 0.01449
+## UC vs SARC
+df_test <- df %>% 
+  filter(Histology %in% c("UC", "SARC")) %>%
+  mutate(seeding_type = case_match(seeding_type, "polyclonal_polyphyletic"~"polyclonal_polyphyletic", .default = "not_PP")) %>%
+  group_by(Histology, seeding_type) %>%
+  summarise(freq=sum(freq)) %>%
+  pivot_wider(names_from = seeding_type, values_from = freq) %>%
+  mutate(not_PP = case_when(is.na(not_PP)~0, .default = not_PP)) %>%
+  as.data.frame() %>% `rownames<-`(c("UC", "SARC")) %>% select(-Histology)
+fisher.test(df_test) #p.val = 0.003953
 ```
 
 
@@ -162,9 +159,13 @@ avg_CP_pertumor <-  sample_CP %>% filter(cellular_prevalence>0.03, cluster_type 
   summarise(avg_CP = mean(cellular_prevalence)) %>%
   mutate(patient = substr(sample_id, 1, 6)) 
 
-hist_df <- seeding %>% distinct(sampleName, Histology) %>%
-  rename(patient = sampleName) %>%
-  bind_rows(data.frame(patient = c("17-047", "18-120", "18-101", "19-044"), Histology = c("NE", "PUC", "UCSD", "UC")))
+hist_df <- sample_info %>% filter(tissue_type!="Normal") %>%
+  select(patient, hist_patient, UC_percent) %>%
+  group_by(patient) %>%
+  summarize(Histology = unique(hist_patient), 
+            UC_percent_avg = mean(UC_percent), 
+            UC_percent_med = median(UC_percent), .groups = "drop") %>%
+  mutate(Histology = case_match(Histology, "UC-Sarc"~"SARC", .default = Histology))
 ```
 
 
@@ -172,144 +173,195 @@ hist_df <- seeding %>% distinct(sampleName, Histology) %>%
 
 set up time: dx to met, met to death, dx to death
 ```{r}
-df <- seeding %>% 
-  group_by(sampleName) %>%
-  summarise(monoclonal=sum(monoclonal), 
-            polyclonal_monophyletic= sum(polyclonal_monophyletic), 
-            polyclonal_polyphyletic=sum(polyclonal_polyphyletic), 
-            clone_number=sum(clone_number)) %>%
-  left_join(seeding %>% distinct(sampleName, Histology, n_tumors)) %>% rowwise() %>%
-  mutate(clones_norm = clone_number/n_tumors,
-         clones_norm2 = clone_number/(n_tumors-1)) %>%
-  left_join(clinical %>% select(Patient, Survival_from_Dx_years, Survival_from_metastasis_yrs, dx_to_met_months, total_treatments), by=c("sampleName"="Patient")) %>%
-  left_join(clones_tumor, by=c("sampleName"="patient")) %>%
-  left_join(avg_CP_df, by=c("sampleName"="patient")) 
+pat_clone <- seeding %>%
+  group_by(patient) %>%
+  summarise(seeding_clones = sum(seeding_clones), 
+            seeding_events = n()) %>% ungroup()
+
+pat_tumor <- seeding %>%
+  distinct(patient, block_letter) %>%
+  group_by(patient) %>%
+  summarise(n_mets = n()) %>% ungroup() %>%
+  mutate(n_tumors = n_mets + 1)
+
+pat_type <- seeding %>%
+  group_by(patient, seeding_type) %>%
+  summarise(freq = n()) %>% ungroup() %>%
+  pivot_wider(names_from = seeding_type, values_from = freq)
+
+pat_seeding <- pat_clone %>%
+  left_join(pat_tumor) %>%
+  mutate(clones_perMet = seeding_clones/n_mets, 
+         clones_perTumor = seeding_clones/n_tumors, 
+         clones_perEvent = seeding_clones/seeding_events) %>%
+  left_join(pat_type) %>%
+  left_join(hist_df) %>%
+  left_join(clinical %>% select(Patient, Survival_from_Dx_years, Survival_from_metastasis_yrs, dx_to_met_months, total_treatments, Age_Dx, Sex), by=c("patient"="Patient")) %>%
+  left_join(clones_tumor) %>%
+  left_join(avg_CP_df) %>%
+  mutate(monoclonal = case_when(is.na(monoclonal)~0, .default = monoclonal), 
+         multi_tumor = case_when(is.na(multi_tumor)~0, .default = multi_tumor), 
+         polyclonal_monophyletic = case_when(is.na(polyclonal_monophyletic)~0, .default = polyclonal_monophyletic), 
+         polyclonal_polyphyletic = case_when(is.na(polyclonal_polyphyletic)~0, .default = polyclonal_polyphyletic), 
+         polyclonal = polyclonal_monophyletic + polyclonal_polyphyletic)
+
+df <- pat_seeding %>%
+  mutate(PP_prop_mets = polyclonal_polyphyletic/n_mets,
+         PP_prop_events = polyclonal_polyphyletic/seeding_events,
+         P_prop_events = polyclonal_polyphyletic/seeding_events,
+         P_prop_mets = polyclonal/n_mets,
+         Histology = factor(Histology, levels=c("UC", "PUC", "UCSD", "NE", "SARC")),
+         Sex = factor(Sex, levels=c("M", "F"))) %>%
+  filter(patient !="16-070")
+
+df_min <- df %>%
+  select(patient, seeding_clones, n_mets, clones_perMet, Histology:UC_percent_avg, Survival_from_metastasis_yrs, Age_Dx, Sex)
+#write.csv(df_min, paste0(SD_main, "2BC_clones_perMet_survival_Cox_covariates.csv"), row.names = F)
 ```
 
-KM - above/below median clones_norm2 vs Surv_from_met -> p=0.048!
+KM with continuous # seeding clones **Fig 2B/C**
 ```{r}
-# above/below the median clones_norm2
-m <- median(df$clones_norm2)
-KM_df <- df %>% 
-  mutate(phy_group = case_when(clones_norm2>m~"high_clones", .default = "low_clones")) %>%
-  select(sampleName, Histology, clones_norm2, Survival_from_Dx_years, Survival_from_metastasis_yrs, phy_group)
-#write.csv(KM_df, 'Main_Figures/Figure2/source_data/2D_KM_byPolyclonality.csv', row.names = F)
-
-KM <- Surv(time=KM_df$Survival_from_metastasis_yrs)
-fit <- survfit(KM ~ phy_group, data=KM_df)
-p <- ggsurvplot(fit=fit, data=KM_df,
-           pval=F, conf.int = F, risk.table = T, 
-           ylab="Survival from Met", xlab="Years", color = "phy_group", palette = c("snow3", "black"))
-p
-cox_model <- coxph(KM ~ phy_group + Histology, data = KM_df)
-summary(cox_model) #0.0483
+#clones_perMet + Histology + Age + Sex
+cox_model <- coxph(Surv(time = df$Survival_from_metastasis_yrs)~clones_perMet + Histology + Age_Dx + Sex, data = df)
+summary(cox_model) #0.0910 
 forest_plot <- forest_model(cox_model)
 forest_plot
+ggsave(plot=forest_plot, paste0(wd, "Clinical_correlations/Forest_clones_perMet_AgeSex_SurvfromMet_updatedClinical.pdf"), width=8, height=4)
+ggsave(plot=forest_plot, paste0(figs, "Clinical_correlations/Forest_clones_perMet_AgeSex_SurvfromMet_updatedClinical.pdf"), width=8, height=4)
+ggsave(plot=forest_plot, paste0(supp, "Clinical_correlations/Forest_clones_perMet_AgeSex_SurvfromMet_updatedClinical.pdf"), width=8, height=4)
 
-ggsave(paste0(wd, "Clinical_correlations/Forest_ClonesNorm2_SurvfromMet.pdf"), plot=forest_plot, width=8, height=4)
-ggsave(paste0(figs, "Clinical_correlations/Forest_ClonesNorm2_SurvfromMet.pdf"), plot=forest_plot, width=8, height=4)
+#calculate + split on risk (full clones + histology)
+df_risk <- df %>%
+  filter(!is.na(Survival_from_metastasis_yrs)) %>%
+  mutate(risk = predict(cox_model, type="lp"), 
+         risk_group = case_when(risk > median(risk)~"high_risk", .default = "low_risk"))
+write.csv(df_risk, paste0(SD_main, "2C_Cox_risk_scores_updatedClinical.csv"), row.names = F)
 
-ggsave(paste0(wd, "Clinical_correlations/KM_ClonesNorm2_SurvfromMet.pdf"),plot=p, width=6, height=6)
-ggsave(paste0(figs, "Clinical_correlations/KM_ClonesNorm2_SurvfromMet.pdf"),plot=p, width=5, height=6)
+KM <- Surv(time=df_risk$Survival_from_metastasis_yrs)
+surv_diff <- survdiff(KM ~ risk_group, data = df_risk)
+surv_diff #p= 7e-04 
+fit <- survfit(KM ~ risk_group, data=df_risk)
+p <- ggsurvplot(fit=fit, data=df_risk,
+           pval=F, conf.int = F, risk.table = T, 
+           ylab="Survival from Met", xlab="Years", color = "risk_group", palette = c("snow3", "black"))
+p
+ggsave(plot=p$plot, paste0(wd, "Clinical_correlations/KM_clones_perMet_SurvfromMet_AgeSex_KM_updatedClinical.pdf"),width=6, height=6)
+ggsave(plot=p$plot, paste0(figs, "Clinical_correlations/KM_clones_perMet_SurvfromMet_AgeSex_KM_updatedClinical.pdf"), width=5, height=6)
+```
+
+compare to hist/age/sex without seeding **Sup Fig 3B**
+```{r}
+# Histology + Age + Sex
+cox_model <- coxph(Surv(time = df$Survival_from_metastasis_yrs)~ Histology + Age_Dx + Sex, data = df)
+summary(cox_model) 
+forest_plot <- forest_model(cox_model)
+forest_plot
+ggsave(plot=forest_plot, paste0(wd, "Clinical_correlations/Forest_AgeSex_SurvfromMet_updatedClinical.pdf"), width=8, height=4)
+ggsave(plot=forest_plot, paste0(supp, "Clinical_correlations/Forest_AgeSex_SurvfromMet_updatedClinical.pdf"), width=8, height=4)
+
+#calculate + split on risk
+df_risk <- df %>%
+  filter(!is.na(Survival_from_metastasis_yrs)) %>%
+  mutate(risk = predict(cox_model, type="lp"), 
+         risk_group = case_when(risk > median(risk)~"high_risk", .default = "low_risk")) %>%
+  select(patient, Histology, Age_Dx, Sex, Survival_from_metastasis_yrs, risk_group)
+write.csv(df_risk, paste0(SD_sup, "S3B_baseModel_KM_riskSplit.csv"), row.names = F)
+
+KM <- Surv(time=df_risk$Survival_from_metastasis_yrs)
+surv_diff <- survdiff(KM ~ risk_group, data = df_risk)
+surv_diff #p= 0.008
+fit <- survfit(KM ~ risk_group, data=df_risk)
+p <- ggsurvplot(fit=fit, data=df_risk,
+           pval=F, conf.int = F, risk.table = T, 
+           ylab="Survival from Met", xlab="Years", color = "risk_group", palette = c("snow3", "black"))
+p
+ggsave(plot=p$plot, paste0(wd, "Clinical_correlations/KM_SurvfromMet_AgeSex_KM_updatedClinical.pdf"),width=6, height=6)
+ggsave(plot=p$plot, paste0(supp, "Clinical_correlations/KM_SurvfromMet_AgeSex_KM_updatedClinical.pdf"), width=5, height=6)
+```
+
+clones per met w/ UC_percent **Sup Fig 3C**
+```{r}
+#clones_perMet + UC_percent + Age + Sex
+cox_model <- coxph(Surv(time = df$Survival_from_metastasis_yrs)~ clones_perMet + UC_percent_avg + Age_Dx + Sex, data = df)
+summary(cox_model) 
+forest_plot <- forest_model(cox_model)
+forest_plot
+ggsave(plot=forest_plot, paste0(wd, "Clinical_correlations/Forest_clones_perMet_UCpercent_AgeSex_SurvfromMet_updatedClinical.pdf"), width=8, height=4)
+ggsave(plot=forest_plot, paste0(supp, "Clinical_correlations/Forest_clones_perMet_UCpercent_AgeSex_SurvfromMet_updatedClinical.pdf"), width=8, height=4)
+
+#calculate + split on risk
+df_risk <- df %>%
+  filter(!is.na(Survival_from_metastasis_yrs)) %>%
+  mutate(risk = predict(cox_model, type="lp"), 
+         risk_group = case_when(risk > median(risk)~"high_risk", .default = "low_risk")) %>%
+  select(patient, seeding_clones, clones_perMet, Survival_from_metastasis_yrs, Histology, UC_percent_avg, Age_Dx, Sex, risk, risk_group) %>%
+  rename(avg_polyclonality_seeding = clones_perMet)
+write.csv(df_risk, paste0(SD_sup, "S3C_KM_percentUC_riskSplit.csv"), row.names = F)
+
+KM <- Surv(time=df_risk$Survival_from_metastasis_yrs)
+surv_diff <- survdiff(KM ~ risk_group, data = df_risk)
+surv_diff #p= 0.008
+fit <- survfit(KM ~ risk_group, data=df_risk)
+p <- ggsurvplot(fit=fit, data=df_risk,
+           pval=F, conf.int = F, risk.table = T, 
+           ylab="Survival from Met", xlab="Years", color = "risk_group", palette = c("snow3", "black"))
+p
+ggsave(plot=p$plot, paste0(wd, "Clinical_correlations/KM_SurvfromMet_UCpercent_AgeSex_KM_updatedClinical.pdf"),width=6, height=6)
+ggsave(plot=p$plot, paste0(supp, "Clinical_correlations/KM_SurvfromMet_UCpercent_AgeSex_KM_updatedClinical.pdf"), width=5, height=6)
 ```
 
 
 ### TREATMENT DIFFERENCES ###
 
-treatment: had immunotherapy
+IO + chemo **Sup Fig 3D**
 ```{r}
-df <- clinical %>% select(Patient, PDL1_inhibitor, PD1_inhibitor, PDL1_inhibitor_duration, PD1_inhibitor_duration) %>%
-  `colnames<-`(c("sampleName", "PDL1_inhibitor", "PD1_inhibitor", "PDL1_months", "PD1_months")) %>%
+IO <- clinical %>% select(Patient, PDL1_inhibitor, PD1_inhibitor) %>%
+  rename(patient = Patient) %>%
   mutate(any_IO = case_when(PDL1_inhibitor == "Y"~"Y", 
                             PD1_inhibitor == "Y"~"Y", 
-                            .default = "N"),
-         IO_months = case_when(PDL1_inhibitor == "Y"~PDL1_months, 
-                            PD1_inhibitor == "Y"~PD1_months, 
-                            .default = NA))
+                            .default = "N"))
 
-df <- seeding %>% 
-  group_by(sampleName) %>%
-  summarise(monoclonal=sum(monoclonal), 
-            polyclonal_monophyletic= sum(polyclonal_monophyletic), 
-            polyclonal_polyphyletic=sum(polyclonal_polyphyletic), 
-            clone_number=sum(clone_number)) %>%
-  left_join(seeding %>% distinct(sampleName, Histology, n_tumors)) %>% rowwise() %>%
-  mutate(value= round((monoclonal*1 + polyclonal_monophyletic*2 + polyclonal_polyphyletic*3)/sum(monoclonal,polyclonal_monophyletic, polyclonal_polyphyletic), 2), 
-         clones_norm = clone_number/n_tumors) %>%
-  left_join(df)
-#write.csv(df, 'Main_Figures/Figure2/source_data/2G_Seeding_byIO.csv', row.names = F)
-
-#graphing-stacked bar IO vs not
-chi_df <- df %>%
-  group_by(any_IO) %>%
-  summarise(monoclonal=sum(monoclonal), 
-            polyclonal_monophyletic= sum(polyclonal_monophyletic), 
-            polyclonal_polyphyletic=sum(polyclonal_polyphyletic)) %>% as.data.frame()
-rownames(chi_df) <- chi_df$any_IO
-chi_df$any_IO <- NULL
-p <- fisher_test(chi_df)$p #p.val = 0.0182
-
-plot_df <- df %>%
-  pivot_longer(cols=monoclonal:polyclonal_polyphyletic, names_to = "seeding_type", values_to = "freq") %>%
-  group_by(any_IO, seeding_type) %>%
-  summarise(freq=sum(freq)) 
-plot_df%>%
-  ggplot(aes(x=any_IO, y=freq, fill=seeding_type)) +
-    geom_bar(stat="identity", position="fill") +
-    scale_fill_manual(values=c("palegreen2", "plum", "maroon")) +
-    theme(legend.position = "none") +
-    labs(y="# seeding events", fill="Seeding Type", caption=paste0("fisher's p-val (M/PM/PP) =",p))
-ggsave(paste0(wd, "SeedingType_byIO.pdf"), width=2, height=3)
-ggsave(paste0(figs, "SeedingType_byIO.pdf"), width=2, height=3)
-```
-
-treatment: had chemotherapy
-```{r}
-df <- clinical %>% select(Patient, gemcitabine_alone, Docetaxel_Taxotere, Paclitaxel_Taxol_Alone, gemcitabine_and_carboplatin, Gemcitabine_and_Paclitaxel, gemcitabine_and_cisplatin, Cisplatin_alone, Etoposide_and_Cisplatin, aMVAC) %>%
+chemo <- clinical %>% select(Patient, 
+                             gemcitabine_alone, Docetaxel_Taxotere, Paclitaxel_Taxol_Alone, gemcitabine_and_carboplatin, Gemcitabine_and_Paclitaxel, 
+                             gemcitabine_and_cisplatin, Cisplatin_alone, Etoposide_and_Cisplatin, aMVAC) %>%
   rowwise() %>%
   mutate(num_chemo = sum(c_across(gemcitabine_alone:aMVAC)=="Y"), 
-         num_cisplatin = sum(c_across(gemcitabine_and_cisplatin:aMVAC)=="Y")) %>% ungroup() %>%
+         num_cisplatin = sum(c_across(gemcitabine_and_cisplatin:aMVAC)=="Y"))  %>%
   mutate(any_chemo = ifelse(num_chemo>0, "Y", "N"),
-         any_cisplatin = ifelse(num_cisplatin>0, "Y", "N"))
+         any_cisplatin = ifelse(num_cisplatin>0, "Y", "N"))%>% ungroup()
+  
 
-df <- seeding %>% 
-  group_by(sampleName) %>%
-  summarise(monoclonal=sum(monoclonal), 
-            polyclonal_monophyletic= sum(polyclonal_monophyletic), 
-            polyclonal_polyphyletic=sum(polyclonal_polyphyletic), 
-            clone_number=sum(clone_number)) %>%
-  left_join(seeding %>% distinct(sampleName, Histology, n_tumors)) %>% rowwise() %>%
-  mutate(value= round((monoclonal*1 + polyclonal_monophyletic*2 + polyclonal_polyphyletic*3)/sum(monoclonal,polyclonal_monophyletic, polyclonal_polyphyletic), 2), 
-         clones_norm = clone_number/n_tumors) %>%
-  left_join(df, by =c("sampleName"="Patient"))
-#write.csv(df, 'Main_Figures/Figure2/source_data/2G_Seeding_byChemo.csv', row.names = F)
+IO_chemo <- IO %>% select(patient, any_IO) %>%
+  left_join(chemo %>% select(Patient, any_chemo), by=c("patient"="Patient")) %>%
+  mutate(combo = case_when(any_IO=="Y"&any_chemo=="Y"~"both", 
+                           any_IO=="Y"&any_chemo=="N"~"IO_only", 
+                           any_IO=="N"&any_chemo=="Y"~"chemo_only", 
+                           .default = "none"), 
+         seeding = case_when(patient %in% seeding$patient~"Yes", .default = "No"))
 
-#graphing-stacked bar chemo vs not
-chi_df <- df %>%
-  group_by(any_chemo) %>%
-  summarise(monoclonal=sum(monoclonal), 
-            polyclonal_monophyletic= sum(polyclonal_monophyletic), 
-            polyclonal_polyphyletic=sum(polyclonal_polyphyletic)) %>% as.data.frame()
-rownames(chi_df) <- chi_df$any_chemo
-chi_df$any_chemo <- NULL
-p <- fisher_test(chi_df)$p #p.val = 0.497
-df %>%
+IO_chemo_seeding <- pat_seeding %>%
+  left_join(IO_chemo) %>%
+  select(patient, monoclonal:polyclonal_polyphyletic, any_IO, any_chemo, combo)
+write.csv(IO_chemo_seeding, paste0(SD_sup, "S3D_SeedingEvents_byIOChemo.csv"), row.names = F)
+
+#graph
+IO_chemo_seeding %>%
+  mutate(combo = factor(combo, levels=c("none", "chemo_only", "both", "IO_only"))) %>%
+  distinct(combo, patient) %>% select(combo) %>% table()
+
+IO_chemo_seeding %>%
+  mutate(combo = factor(combo, levels=c("none", "chemo_only", "both", "IO_only"))) %>%
   pivot_longer(cols=monoclonal:polyclonal_polyphyletic, names_to = "seeding_type", values_to = "freq") %>%
-  ggplot(aes(x=any_chemo, y=freq, fill=seeding_type)) +
+  ggplot(aes(x=combo, y=freq, fill=seeding_type)) +
     geom_bar(stat="identity", position="fill") +
+    scale_x_discrete(labels=c("none\nn=2", "chemo_only\nn=4", "both\nn=7", "IO_only\nn=3"), name = NULL) +
+    labs(y="Proportion Seeding Events") +
     scale_fill_manual(values=c("palegreen2", "plum", "maroon")) +
-    theme(legend.position = "none") +
-    labs(y="# seeding events", fill="Seeding Type", caption=paste0("fisher's p-val (M/PM/PP) =",p))
-ggsave(paste0(wd, "SeedingType_byChemo_updated.pdf"), width=2, height=3)
-ggsave(paste0(figs, "SeedingType_byChemo_updated.pdf"), width=2, height=3)
+    theme(legend.position = "none") 
+ggsave(paste0(wd, "SeedingType_byIOChemo.pdf"), width=3.5, height=3)
+ggsave(paste0(supp, "SeedingType_byIOChemo.pdf"), width=3.5, height=3)
 ```
 
-### ETC ###
 
-write out relevant csvs
-```{r}
-write.csv(clinical, paste0(wd, "clinical_data/clinical.csv"), row.names = F)
-write.csv(num_treatments, paste0(wd, "clinical_data/number_treatments.csv"), row.names = F)
-write.csv(treatments, paste0(wd, "clinical_data/all_treatments.csv"), row.names = F)
-```
+
 
