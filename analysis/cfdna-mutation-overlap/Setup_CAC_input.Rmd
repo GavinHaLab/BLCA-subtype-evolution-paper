@@ -1,0 +1,153 @@
+---
+title: "CollectAllelicCounts"
+output: html_document
+date: "2024-10-29"
+---
+
+libraries
+```{r include=FALSE}
+library(data.table)
+library(readxl)
+library(rstatix)
+library(ggpubr)
+library(tidyverse)
+
+wd <- 'cfDNA/withTURBT/'
+sample_info <- read.csv('/Revision_1/Supplementary_tables/all_sequencing_detailed_March2026.csv')
+old_sample_info <- read.csv('/Supplementary_Tables/cohort_description_details/all_sequencing_detailed.csv')
+dna_samples <- sample_info %>% filter(has_DNAseq=="yes", tissue_type!="Normal", tumor_names_seeding_Fig1_SuppFig1 !="Low quality not part of seeding") %>% select(patient, dnaseq_sampleName) %>% left_join(old_sample_info %>% select(patient, dnaseq_sampleName, tumor_name2)) %>% mutate(name_diff = ifelse(dnaseq_sampleName == tumor_name2, "same", "diff"))
+```
+
+### MAKE DF OF ALL SNVS IN TUMOR TISSUES ###
+
+import tissue SNVs
+-these do not exclude FFPE primary unique mutations, so that is done below by filtering by pyclone input bed files
+-does not include indels (which is fine)
+```{r message=FALSE, warning=FALSE}
+##original code to get mutations
+myfl <- list.files("/annovar/annovar_outputs_snvs/2ormorecallers/UW_tvaf1per/filters_set2/withcfdna_twoFilters")
+mydir <- "/annovar/annovar_outputs_snvs/2ormorecallers/UW_tvaf1per/filters_set2/withcfdna_twoFilters/"
+
+tissue <- as.tibble(data.frame())
+i=1
+for (fl in myfl){
+  pat <- sub(".*?(\\d{2}-\\d{3}).*", "\\1", fl)
+  samp <- sub(".txt","",fl)
+  mydf <- read_delim(paste0(mydir,fl), delim = "\t", escape_double = FALSE, trim_ws = TRUE) %>%
+    select(Chr,Start, End, Ref, Alt, Func.refGene, Gene.refGene, Total_reads_in_normal, Ref_reads_in_normal, Alt_reads_in_normal, Normal_VAF, Total_reads_in_Tumor, Ref_reads_in_Tumor, Alt_reads_in_Tumor, Tumor_VAF) %>%
+    mutate(patient = pat, sample=samp)
+  tissue <- bind_rows(tissue, mydf)
+  print(i)
+  i=i+1
+}
+
+tissue <- tissue %>% filter(!grepl("TAN", sample))
+#write.csv(tissue, 'cfDNA/Before_TopOff/WGS_tissue-cfDNA_SNVs_All.csv')
+
+cfDNA_WGS <- filter(tissue, grepl("wgs_cf", sample))
+tumor <- tissue %>% filter(!grepl("wgs_cf|TAN", sample)) %>% #remove cfDNA, duplicate samples (TAN) 
+  rowwise() %>% mutate(id = paste(Chr, Start, Ref, Alt, sep =  "_"), varID = paste(Chr, Start, Ref, sep = "_")) %>% ungroup()
+
+#write.csv(cfDNA_WGS, 'cfDNA/Before_TopOff/WGS_cfDNA_SNVs_All.csv')
+#write.csv(tumor, 'cfDNA/With_TopOff/WGS_tissue_SNVs.csv')
+```
+
+add TURBT SNVs
+```{r message=FALSE, warning=FALSE}
+##source code to get mutations
+TURBTfl <- list.files("/annovar/annovar_outputs_snvs/2ormorecallers/UW_tvaf1per/filters_set2/nocfdna")
+TURBTfl <- TURBTfl[grepl("TURBT", TURBTfl)]
+TURBTdir <- "/annovar/annovar_outputs_snvs/2ormorecallers/UW_tvaf1per/filters_set2/nocfdna/"
+
+i <- 1
+for (fl in TURBTfl){
+  pat <- sub(".*?(\\d{2}-\\d{3}).*", "\\1", fl)
+  samp <- sub(".txt","",fl)
+  mydf <- read_delim(paste0(TURBTdir,fl), delim = "\t", escape_double = FALSE, trim_ws = TRUE) %>%
+    select(Chr,Start, End, Ref, Alt, Func.refGene, Gene.refGene, Ref_reads_in_normal, Alt_reads_in_normal, Normal_VAF, Total_reads_in_Tumor, Ref_reads_in_Tumor, Alt_reads_in_Tumor, Tumor_VAF) %>%
+    mutate(patient = pat, sample=samp) %>%
+    rowwise() %>% mutate(id = paste(Chr, Start, Ref, Alt, sep =  "_"), varID = paste(Chr, Start, Ref, sep = "_")) %>% ungroup()
+  tumor <- bind_rows(tumor, mydf)
+  print(paste0("TURBT", i))
+  i=i+1
+}
+
+tumor <- tumor %>% filter(!sample %in% c("18-101M3", "17-047pD10", "18-120pA14", "19-044pB11", "19-004J1-007J1"))
+
+#write.csv(tumor, paste0(wd, "WGS_tissue_SNVs_withTURBT.csv"), row.names=F)
+```
+
+use Pyclone input bed files to filter out FFPE primary unique mutations from above "tissue"
+```{r}
+myfl <- list.files("/analysis/mutationCalling/grep_outputs/with-PON_withNormalSamples/snvs_intervals/2orMore/UW_tvaf1per/filters_set2/combinedPatient/nocfdna")
+myfl <- grep(".readCounts", myfl, value = T)
+mydir <- "/analysis/mutationCalling/grep_outputs/with-PON_withNormalSamples/snvs_intervals/2orMore/UW_tvaf1per/filters_set2/combinedPatient/nocfdna/"
+
+df1 <- data.frame(full = unique(sample_info$patient)) %>%
+  mutate(short = substr(full, 4, 6))
+
+tumor_filtered <- data.frame()
+for(i in 1:nrow(df1)){
+  pat <- df1$full[i]
+  fl <- grep(df1$short[i], myfl, value=T)
+
+  filtered_muts <- read_delim(paste0(mydir, fl), delim="\t", show_col_types = F) %>%
+    mutate(id = paste0(Chr, "_", Start, "_", Ref, "_", Alt))
+  tumor_pat <- filter(tumor, patient ==pat)
+
+  #check
+  print(pat)
+  print(paste0(length(setdiff(unique(filtered_muts$id), unique(tumor_pat$id))), " muts in filtered bed not in tumor")) #should be 0
+  print(tumor_pat %>% filter(!id %in% unique(filtered_muts$id)) %>% pull(sample) %>% table()) #should only be FFPE primary
+
+  #filter
+  tumor_pat <- tumor_pat %>% filter(id %in% unique(filtered_muts$id))
+  tumor_filtered <- rbind(tumor_filtered, tumor_pat)
+}
+
+# write.csv(tumor_filtered, paste0(wd, "WGS_tissue_SNVs_withTURBT_pycloneBEDfiltered.csv"), row.names = F)
+```
+
+input tumor SNV df
+```{r}
+#tumor <- read.csv(paste0(wd, "WGS_tissue_SNVs_withTURBT.csv"))
+tumor_filtered <- read.csv(paste0(wd, "WGS_tissue_SNVs_withTURBT_pycloneBEDfiltered.csv"))
+```
+
+
+### MAKE INPUTS FOR COLLECTALLELICCOUNTS ###
+
+Per patient BED file of tumor SNVs (updated with FFPE unique filtering, removing 5 bad samples)
+```{r}
+#Write a BED file with union of all the SNVs in a patient
+##input: patient = vector of all patients, tumor = data frame including all tumor SNVs from all patients (has columns varID, Chr, Start, End)
+for(i in 1:length(patient)) #for each patient in dataset
+{
+  snv_bed=tumor_filtered[tumor_filtered$patient==patient[i],] #subset tumor df to only SNVs in current patient
+  snv_bed=snv_bed[!duplicated(snv_bed$varID),] #remove duplicated SNVs by varID
+  snv_bed=snv_bed[,c('Chr', 'Start', 'End')] #subset to only Chr, Start, End columns
+  snv_bed <- snv_bed %>% mutate(Start = as.numeric(format(Start, scientific=F)), End = as.numeric(format(End, scientific=F)))
+  snv_bed$Start=snv_bed$Start-1 #adjust "start position to be 0-based
+  write.table(snv_bed,file=paste0('cfDNA/With_TopOff/PowerCalc/tumorBEDs_new/', patient[i], "_tumorSNV.bed") ,row.names=FALSE, col.names=FALSE, quote=FALSE, sep="\t") #write bed file for each patient including all tumor mutations in that patient
+}
+```
+
+Set up sh file to run CollectAllelicCounts
+```{r}
+#inputs
+inputs <- read_csv("cfDNA/With_TopOff/PowerCalc/CAC_sh_inputs_v2.csv")
+hg38_ref <- "GRCh38/Broad_bundle_hg38/v0/Homo_sapiens_assembly38.fasta"
+
+#Write a .sh file quering gatk CollectAllelicCounts for all the patient SNV in the ctDNA file
+file_conn <- file('gatk_v2.sh', open = "w")
+
+for(i in 1:nrow(inputs)){
+  a=paste0('gatk CollectAllelicCounts -I ',inputs[i,4], ' -R ',hg38_ref,' -L ', inputs[i,5], ' -O ',inputs[i,6])
+  # Write the strings to separate lines in the .sh file
+  writeLines(a, file_conn)
+}
+# Close the file connection
+close(file_conn)
+
+#Run this file using sh Filename.sh on the terminal (ml GATK, output dir needs to be in place before running)
+```

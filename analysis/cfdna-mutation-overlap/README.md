@@ -3,13 +3,13 @@
 ## Analysis Steps
 
 1. **Generate BED files of tumor SNVs**  
-   Use `CollectAllelicCounts.Rmd` to make BED files of tumor SNV loci and prepare for running `CollectAllelicCounts`.
+   Use `Setup_CAC_input.Rmd` to make BED files of tumor SNV loci and prepare for running `CollectAllelicCounts`.
 
 2. **Run GATK CollectAllelicCounts**  
    Execute the pipeline to count cfDNA reads at tumor SNV loci using the `gatk.sh` script.
 
 3. **Create DataFrames of cfDNA Counts**  
-   Use `CollectAllelicCounts.Rmd` to read GATK CollectAllelicCounts output and make dataframes of cfDNA reads at tumor SNV loci.
+   Use `Read_CAC_makeDF.Rmd` to read GATK CollectAllelicCounts output and make dataframes of cfDNA reads at tumor SNV loci.
 
 4. **Analyze and Visualize Mutation Overlap**  
    Use `Overlap_Analysis.Rmd` to:

@@ -1,0 +1,224 @@
+---
+title: "CollectAllelicCounts"
+output: html_document
+date: "2024-10-29"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(data.table)
+library(readxl)
+library(rstatix)
+library(ggpubr)
+library(GenomicRanges)
+library(rtracklayer)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(tidyverse)
+```
+
+### INPUTS ###
+
+sample df
+```{r}
+inputs <- read_csv("/cfDNA/With_TopOff/PowerCalc/CAC_sh_inputs.csv") %>%
+  select(patient, seqType, ID)
+
+tumor_filtered <- read.csv('/cfDNA/withTURBT/WGS_tissue_SNVs_withTURBT_pycloneBEDfiltered.csv')
+```
+
+set up function to read output of CollectAllelicCounts
+```{r}
+# Function to read output file of CollectAllelicCounts and ignore rows starting with '@', then read the rest into a data frame
+readFileIgnoreAtRows <- function(filePath) {
+  # Step 1: Read the entire file into a character vector
+  fileContent <- readLines(filePath)
+  
+  # Initialize an empty vector to hold the non-@ lines
+  nonAtLines <- c()
+  
+  # Step 2: Filter out lines starting with '@'
+  for(line in fileContent) {
+    if (!grepl("^@", line)) { # Using grepl to check if the line does NOT start with '@'
+      nonAtLines <- c(nonAtLines, line)
+    }
+  }
+  # Convert the list of lines into a single string, ensuring tabs are preserved
+  dataString <- paste(nonAtLines, collapse = "\n")
+  
+  # Step 3: Convert the string into a data frame, handling tab separation
+  # Splitting the string into lines based on newline characters
+  dataLines <- strsplit(dataString, "\n")[[1]]
+  
+  # Converting the list of trimmed lines into a matrix, using tab as separator
+  dataMatrix <- do.call(rbind, lapply(dataLines, function(line) strsplit(line, "\\t")[[1]]))
+  
+  # Converting the matrix to a data frame
+  dataFrame <- as.data.frame(dataMatrix, stringsAsFactors = FALSE)
+  colnames(dataFrame)=dataFrame[1,]
+  dataFrame=dataFrame[-1,]
+  return(dataFrame)
+}
+```
+
+get cfDNA TFx - use TITAN TFx if patient had WGS, ichor TFx for patients without deep WGS
+```{r}
+#Oct 2024 updated TITAN TFx with Top Off for WGS cfDNA
+DEEP_TFx <- read_delim("BC-TAN_TFX_Subtype_cfDNA.tsv", delim = "\t", show_col_types = F) %>%
+  mutate(patient = substr(sample, 8,13)) %>%
+  left_join(inputs %>% filter(seqType=="cfWGS")) %>%
+  rename(sample_id=ID, type=seqType, cfDNA_TFx = TITAN_tfx_topOffs, preTopOff_TFx=tfx, patient_id=patient) %>% 
+  mutate(cfSample = paste0(sample_id, "_", type))
+
+#ichor TFx for targeted cfDNA (not updated, but correct- didn't need to rerun ULP w/ July updates)
+ULP_TFx <- read_csv("/important_files_References/sample_details_tumorfractions_clinical.csv")[,1:6] %>%
+  filter(grepl("ULP", type)) %>%
+  rename(cfDNA_TFx = ichor_tfx) %>%
+  mutate(cfSample = paste0(sample_id, "_", type))
+
+#combine TFx:
+##using TITAN TFx for all if patient had WGS, or ichor TFx for patients without deep WGS
+TFx_cfDNA <- data.frame()
+samps <- unique(c(DEEP_TFx$cfSample[1:8], ULP_TFx$cfSample))
+for(samp in samps){
+  pat <- substr(samp, 1, 6)
+  has_WGS <- nrow(DEEP_TFx %>% filter(patient_id==pat))>0
+  if(has_WGS){TFx = DEEP_TFx %>% filter(patient_id==pat) %>% pull(cfDNA_TFx)} else {TFx = ULP_TFx %>% filter(cfSample==samp) %>% pull(cfDNA_TFx)}
+  sample_id <- substr(samp, 1, 11)
+  type <- ifelse(grepl("cfWGS", samp), "cfWGS", "ULP-WGS")
+  
+  temp <- data.frame(patient_id = pat, cfSample = samp, sample_id = sample_id, cfDNA_TFx = TFx, type = type)
+  TFx_cfDNA <- bind_rows(TFx_cfDNA, temp)
+}
+
+rm(DEEP_TFx, ULP_TFx, temp)
+```
+
+get tissue tumor purity
+```{r include=FALSE}
+#read in - Pushpa made this file
+tumor_purity <- read.csv("WGS_purity_ploidy_curated_Feb2026.csv") %>%
+  mutate(sample_id= case_match(sample_id, "16-079_Primary-FFPE"~"16-079_Primary-FF", .default = sample_id)) #allpower CAC inputs has "FF" so make tumor_purity match that
+```
+
+### COMBINE + POWER CALC ###
+
+do power calc (original, per tumor)
+```{r}
+#loop over all
+mydir <- "/cell_free_dna/OverlapPowerCalc/NEWTopOff/output/"
+myfl <- list.files(mydir)
+#fl <- myfl[3]
+
+allpower <- data.frame()
+for(fl in myfl){
+  pat <- substr(fl,1,6)
+  #cfDNA read counts in each cfDNA sample for all tumor mutations in that patient
+  GAC <- readFileIgnoreAtRows(paste0(mydir,fl)) %>% 
+    mutate(across(2:4, as.numeric)) %>%
+    `colnames<-`(c("Chr", "Start", "Ref_reads_ctDNA", "Alt_reads_ctDNA", "Ref", "Alt")) %>%
+    mutate("Total_reads_ctDNA" = Ref_reads_ctDNA + Alt_reads_ctDNA, 
+          varID = paste(Chr, Start, Ref, sep = "_"), 
+          cfSample = substr(fl, 1,11))
+  
+  #add cfDNA TFx to above df, using titan or ichor depending on cfDNA sample type
+  TFx <- TFx_cfDNA %>% filter(patient_id == pat)
+  if(substr(fl, 13,16)=="cfTP"){
+    GAC <- GAC %>% left_join(TFx %>% filter(grepl("ULP-WGS", cfSample)), by=c("cfSample"= "sample_id"))
+  } else{GAC <- GAC %>% left_join(TFx %>% filter(grepl("_cfWGS", cfSample)), by=c("cfSample"= "sample_id"))}
+  GAC <- GAC %>% mutate(cfSample = cfSample.y) %>% select(-cfSample.y)
+  
+  #filter df of all tumor mutations to the patient we're looking at, and add on tumor purity for each tumor sample
+  tumor_sub <- tumor_filtered %>% filter(patient == pat) %>% left_join(tumor_purity %>% select(sample_id, tumor_purity), by=c("sample"="sample_id"))
+  
+  #left join the cfDNA read counts to the tumor mutations by varID
+  df1 <- tumor_sub %>% select(varID, id, Func.refGene, Gene.refGene, sample, patient, Total_reads_in_Tumor, Tumor_VAF, tumor_purity) %>%
+    left_join(GAC %>% select(varID, Ref_reads_ctDNA, Alt_reads_ctDNA, Total_reads_ctDNA,cfSample, cfDNA_TFx, type))
+  
+  #calculate power per tumor mutation using purity corrected tumor VAF and dbinom of cfDNA read depth
+  df1 <- df1 %>% 
+    mutate(p=Tumor_VAF*cfDNA_TFx/tumor_purity) %>%
+    mutate(p_alt = ifelse(p>1, 1, p)) %>%
+    mutate(power = 1- (dbinom(0,Total_reads_ctDNA, p_alt)+dbinom(1,Total_reads_ctDNA, p_alt)+dbinom(2,Total_reads_ctDNA, p_alt)))
+  allpower <- bind_rows(allpower, df1)
+}
+
+allpower <- allpower %>%
+  mutate(CAC3 = case_when(Alt_reads_ctDNA>=3~"CAC_called_3", .default = "CAC_under_3"))
+
+#cfDNAPower_TITANTFx_BEDfiltered_TumorMuts.csv: using only 1 TFx per patient, prioritizing TITAN
+#write.csv(allpower, "/cfDNA/withTURBT/cfDNAPower_TITANTFx_pycloneBEDfiltered_TumorMuts_withTURBT.csv", row.names=F)
+```
+
+### ANNOTATE + COLLAPSE ###
+
+annotate mutation clonality + driver info
+```{r}
+#grab per mutation cluster & clonality annotation (csv created in Metastatic_seeding/cluster_CPs.Rmd)
+mut_clonality <- read.csv('/Supplementary_Tables/genomic_results/SNVs/all_mut_CP_withAnnovar_withTURBT.csv') %>%
+  mutate(sample_id= case_match(sample_id, "16-079_Primary-FFPE"~"16-079_Primary-FF", .default = sample_id)) %>%
+  rowwise() %>% mutate(id = paste(Chr, Start, Ref, Alt, sep =  "_"), varID = paste(Chr, Start, Ref, sep = "_")) %>% ungroup()
+
+#add tumor cluster annotation to cfDNA mutation calls
+allpower <- allpower %>% 
+  left_join(mut_clonality %>% select(sample_id, cluster_id, id, cluster_mut_no, cluster_type, pathogenic_3m_updated, IsDriverBLCAupdated), by=c("sample"="sample_id", "id"="id")) %>%
+  rename("cluster_status"="cluster_type")
+
+#how many unannotated cluster_status in allpower?
+nrow(filter(allpower, is.na(cluster_status))) #79297 rows (not unique mutations)
+filter(allpower, is.na(cluster_status)) %>% pull(sample) %>% table() %>% as.data.frame() %>% arrange(desc(Freq)) #18-101, 17-047, 19-001, 19-037 all have >2000
+allpower %>% group_by(patient, id) %>% slice_head() %>% filter(is.na(cluster_status)) %>% nrow() #30,085 unique mutations unannotated (of 423,243)
+allpower %>% group_by(patient, id) %>% slice_head() %>% filter(is.na(cluster_status)) %>% pull(patient) %>% table() %>% as.data.frame() %>% arrange(desc(Freq))
+
+#write.csv(allpower, "/cfDNA/withTURBT/cfDNAPower_TITANTFx_pycloneBEDfiltered_TumorMuts_withTURBT.csv", row.names=F)
+```
+
+collapse to unique mutation per patient 
+-powered = power > 0.8 from any tumor
+```{r}
+collapsed_power <- allpower %>%
+  group_by(cfSample, id) %>%
+  summarise(powered = any(power>0.8), 
+            across(c(patient, Func.refGene, Gene.refGene, cfDNA_TFx, type,CAC3, cluster_id, cluster_mut_no, cluster_status, Ref_reads_ctDNA, Alt_reads_ctDNA, Total_reads_ctDNA, pathogenic_3m_updated, IsDriverBLCAupdated), unique),
+            .groups = "drop")
+
+#write.csv(collapsed_power, "/cfDNA/withTURBT/cfDNAPower_TITANTFx_pycloneBEDfiltered_TumorMuts_withTURBT_Collapsed.csv", row.names=F)
+```
+
+### Subset TP to BED file w/ 150bp pad ##
+
+import TP BED file (with 150bp buffer)
+```{r}
+TPbed_hg38_thomas150 <- import.bed("/cell_free_dna/targeted_panel/BroadPanCancer2019.bed.cp.hg38.buffer.txt")
+```
+
+which tumor mutations could be captured by TP BED
+```{r}
+#all tumor mutations
+cfTP <- collapsed_power %>% filter(type=="ULP-WGS") %>%
+  select(cfSample, id, Gene.refGene) %>%
+  mutate(Chr = sub("_.*", "", id), 
+         Start = as.numeric(sub(".*_(\\d+)_.*", "\\1", id)), 
+         End = as.numeric(sub(".*_(\\d+)_.*", "\\1", id)))
+
+#make into GRanges
+G_cfTP <- GRanges(seqnames = cfTP$Chr, 
+                            ranges = IRanges(start=cfTP$Start, end=cfTP$End), 
+                            name=cfTP$id, 
+                            Gene = cfTP$Gene.refGene, 
+                            sample = cfTP$cfSample)
+
+#find overlaps between mutations and 150bp buffer TP BED file
+cfTP_inBED <- as.data.frame(subsetByOverlaps(G_cfTP, TPbed_hg38_thomas150)) #no buffer = 718 tumor mutations in TP BED file range; thomas 150buffer = 736 in BED range
+
+#add column to collapsed_power with whether the tumor mutation is covered by the targeted panel
+inBED <- cfTP_inBED %>% pull(name)
+collapsed_power <- collapsed_power %>% 
+  mutate(in_TPBED = case_when(type == "cfWGS"~"Yes", 
+                              id %in% inBED~"Yes", .default = "No")) %>%
+  mutate(type = case_match(type, "ULP-WGS"~"Targeted", "cfWGS"~"WGS"))
+```
+
+write out with 150bp BED file column
+```{r}
+write.csv(collapsed_power, "/cfDNA/withTURBT/cfDNAPower_TITANTFx_pycloneBEDfiltered_TumorMuts_withTURBT_Collapsed_TPbed.csv", row.names = F)
+```
