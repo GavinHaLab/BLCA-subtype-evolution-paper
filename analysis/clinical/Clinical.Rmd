@@ -1,0 +1,154 @@
+---
+title: "Survival"
+output: html_document
+date: "2025-10-14"
+---
+
+```{r message=FALSE, warning=FALSE}
+library(ggbeeswarm)
+library(rstatix)
+library(ggpubr)
+library(survival)
+library(forestmodel)
+library(survminer)
+library(tidyverse)
+```
+
+```{r}
+hist_col <- c("UC"="#815CA6","PUC"="#84C2EB","NE"="#E24D74","UC_focal"="#ACD7A0","UCSD"="#43823D","UC_UCSD"="#ACD7A0", "SARC"="#D2BEA5",
+              "Founder"= "#FEC216", "Shared"= "#2B3990", "Private"= "#C91220", 
+              "Targeted"="#F8766D", "WGS"="#00BFC4")
+
+theme_set(theme_classic() + 
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  axis.ticks = element_line(color="black")))
+
+wd <- '/Survival/'
+source_data <- '/Revision_1/Supplementary_Figures/Supplementary_Figure1/source_data/'
+```
+
+
+import
+```{r}
+clinical <- read.csv('/Supplementary_Tables/clinical_data/all_clinical_data_20260413_forSup.csv')
+pathology <- read.csv('/Supplementary_Tables/clinical_data/pathology_byBlock.csv')
+```
+
+count liver/LN
+```{r}
+liver <- pathology %>%
+  filter(!grepl("\\(N\\)", Tissue_Type), grepl("Liver|Liber", Tissue_Type), Percent_Cancer>0) %>%
+  group_by(Patient) %>%
+  summarise(n_liver = n_distinct(Block_Letter))
+pat <- liver$Patient
+liver <- liver %>%
+  rbind(data.frame(Patient = setdiff(clinical$Patient, pat), 
+                   n_liver = rep(0,7))) %>%
+  arrange(Patient) %>%
+  mutate(have_liver = case_when(n_liver>0~"yes", .default = "no"))
+
+
+clinical <- clinical %>% left_join(liver)
+```
+
+survival by histology
+```{r}
+df <- clinical %>% select(Patient,Histology, Survival_from_Dx_years, Survival_from_metastasis_yrs, have_liver) %>% 
+  mutate(Histology = factor(Histology, levels=c("UC", "UCSD", "PUC", "NE", "SARC")))
+write.csv(df, paste0(source_data, "S1BC_Survival_Hist_Liver.csv"), row.names = F)
+
+cox_model <- coxph(Surv(time = df$Survival_from_Dx_years)~ Histology, data = df)
+summary(cox_model) 
+forest_plot <- forest_model(cox_model)
+forest_plot
+
+KM <- Surv(time=df$Survival_from_Dx_years)
+surv_diff <- survdiff(KM ~ Histology, data = df)
+surv_diff #p= 7e-04 
+fit <- survfit(KM ~ Histology, data=df)
+p <- ggsurvplot(fit=fit, data=df,
+           pval=F, conf.int = F, risk.table = T, 
+           ylab="Survival from Dx", xlab="Years", color = "Histology", palette = hist_col)
+p
+
+sup <- '/Revision_1/Supplementary_Figures/Supplementary_Figure1/raw_images/'
+ggsave(plot=p$plot, paste0(sup, "KM_byHist.pdf"), width=5, height=4)
+```
+
+survival by liver mets
+```{r}
+clinical %>%
+  ggplot(aes(y=Survival_from_Dx_years, x=have_liver)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_quasirandom(aes(color=Histology), size=3) +
+    scale_color_manual(values=hist_col) +
+    labs(x="Liver Met", y="Survival from Dx (years)", caption = paste0("wilcox p-val; t-test p=", tp))
+ggsave(paste0(sup, "SurvivalfromDx_byLiverMet_box_nostats.pdf"), width=3, height=4)
+```
+
+ANCOVA
+```{r}
+model <- lm(data=clinical, formula = Survival_from_Dx_years~have_liver)
+summary(model) #p=0.6394 (have_liveryes)
+
+model <- lm(data=clinical, formula = Survival_from_Dx_years~have_liver + Histology)
+summary(model) #p=0.8796 (have_liveryes) p=0.0760 (HistologyPUC)
+```
+
+swimmers plot
+```{r}
+swim <- read.csv('/Revision_1/Supplementary_Figures/Supplementary_Figure1/source_data/S1A_swimmers_plot.csv')
+
+plot_treatments <- c('gemcitabine_alone','gemcitabine_and_carboplatin','gemcitabine_and_cisplatin','Cisplatin_alone','Etoposide_and_Cisplatin','aMVAC','PDL1_inhibitor','PD1_inhibitor','Rapamycin','BCG','Docetaxel_Taxotere','Prednisone','OGX427_02','IMC_18F1','Pemetrexed','AGS_15E','Gemcitabine_and_Paclitaxel','Paclitaxel_Taxol_Alone','Eribulin', "Mitomycin", "Sacituzumab Govitecan")
+treat_col <- c("gemcitabine_alone"="#0000FF", "gemcitabine_and_carboplatin"="#93D4FF", "gemcitabine_and_cisplatin"="#00FFBE" , "Cisplatin_alone" ="#02AD24"  ,"Etoposide_and_Cisplatin"= "#000033", "Gemcitabine_and_Paclitaxel"="#B1CC71" , "Paclitaxel_Taxol_Alone"="#C8FF00","Pemetrexed"="#F2F318" ,"Mitomycin"="darkgreen",  "aMVAC"="#783FC1" , "Docetaxel_Taxotere"="#DD00FF" ,
+               "PDL1_inhibitor"="black" , "PD1_inhibitor"="grey", 
+               "Rapamycin"="#FFD300"  , "BCG"="#FE8F42" ,  "Prednisone"="#9A4D42", "OGX427_02"="#FFB79F" , "IMC_18F1"="#886C00" ,  "AGS_15E"="#A10300",  "Eribulin"="#766C95" , "Sacituzumab Govitecan"="lavender")
+
+treat_names_new <- c('gemcitabine_alone','gemcitabine_and_carboplatin','gemcitabine_and_cisplatin','Cisplatin_alone','Etoposide_and_Cisplatin','MVAC','ddMVAC','aMVAC','PDL1_inhibitor','PD1_inhibitor','VEGF_inhibitor','Rapamycin','BCG','Docetaxel_Taxotere','Denosumab','Furosemide','Prednisone','OGX427_02','IMC_18F1','Pemetrexed','AGS_15E','Gemcitabine_and_Paclitaxel','Paclitaxel_Taxol_Alone','Eribulin','Thiotepa','Mitomycin','Enfortumab_vendotin','Sacituzumab_govitecan')
+chemo <- c("gemcitabine_alone", "gemcitabine_and_carboplatin", "gemcitabine_and_cisplatin", "Cisplatin_alone", "Etoposide_and_Cisplatin", "aMVAC","Docetaxel_Taxotere", "Gemcitabine_and_Paclitaxel", "Paclitaxel_Taxol_Alone", "Pemetrexed", "Mitomycin")
+drop_treatments <- c('Denosumab','Decadron','Furosemide') #these treat symptoms, not kill cancer
+all_N <- c("MVAC", "ddMVAC", "VEGF_inhibitor", "Thiotepa", "Mitomycin", "Enfortumab_vendotin", "Sacituzumab_govitecan") 
+important_treatments <- c("XRT",setdiff(setdiff(treat_names_new, drop_treatments), all_N))
+
+#plot
+swim %>%
+  mutate(Patient = factor(Patient, levels=rev(sort(unique(Patient)))),
+    Patient_num = as.numeric(Patient)) %>% 
+  ggplot(aes(y=Patient)) +
+    theme_classic() +
+    theme(axis.text = element_text(color="black"),
+          axis.ticks = element_line(color="black"), 
+          panel.grid.major.x = element_line(color = "gray80"),
+          panel.grid.minor.x = element_line(color = "gray80")) +
+  
+    #OS/autopsy
+    geom_segment(aes(x=time_from_dx_start, xend = time_from_dx_end, y=Patient, yend=Patient), data = . %>% filter(event_type=="OS_months")) +
+    geom_point(aes(x=time_from_dx_start, y=Patient),shape=23, size=3, data= . %>% filter(event_type =="autopsy")) +
+  
+    #surgery
+    geom_point(aes(x=time_from_dx_start, y=Patient), shape=17, color="dodgerblue2", size=4, data=. %>% filter(event_type =="Cystectomy")) + #blue triangle = Cystectomy
+    geom_point(aes(x=time_from_dx_start, y=Patient), shape=25, color="dodgerblue2",fill="dodgerblue2", size=4, data=. %>% filter(event_type =="NephroU_Ureterectomy")) + #blue upside down triangle = NephroU_Ureterectomy
+    geom_point(aes(x=time_from_dx_start, y=Patient), shape=18, color="dodgerblue2", size=6, data=. %>% filter(event_type =="Urethrectomy")) + #blue diamond = Urethrectomy
+  
+    #radiation
+    geom_point(aes(x=time_from_dx_start, y=Patient), shape=8, color="red", size=4, data=. %>% filter(event_type =="radiation")) + #blue triangle = Cystectomy
+  
+    #treatments (chemo, IO, other)
+    geom_segment(aes(x=time_from_dx_start, xend = time_from_dx_end, y=Patient, yend=Patient, color=event_type),linewidth = 2, data = . %>% filter(event_type%in%chemo)) +
+    geom_rect_pattern(aes(xmin=time_from_dx_start, xmax = time_from_dx_end, ymin=Patient_num-0.2, ymax=Patient_num+0.2, color=event_type),
+                      fill=NA, linewidth = 1, pattern="stripe", pattern_spacing=0.02, pattern_fill="black",
+                      data = . %>% filter(event_type%in%c("PDL1_inhibitor", "PD1_inhibitor"))) +
+    geom_rect(aes(xmin=time_from_dx_start, xmax = time_from_dx_end, ymin=Patient_num-0.2, ymax=Patient_num+0.2, color=event_type),fill=NA, linewidth = 1, data = . %>% filter(event_type%in%setdiff(important_treatments,chemo))) +
+  
+    #mets
+    geom_point(aes(x=time_from_dx_start, y=Patient),shape=16, size=3.5, color="black", data= . %>% filter(event_type =="first_met")) + #black closed circle = met
+    
+    scale_x_continuous(breaks=c(seq(0,48,6), seq(48,120,12)), limits = c(-1,120)) +
+    scale_x_break(c(48,49), scales=0.3, expand = F) +
+    scale_color_manual(values=treat_col, breaks=names(treat_col)) +
+    labs(x="Months from Diagnosis")
+#ggsave('/Supplementary_Figures/Supplementary_Figure1/swimmers_plots_updatedApr2026.pdf', width=15, height=8)
+
+```
+
