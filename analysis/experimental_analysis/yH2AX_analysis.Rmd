@@ -1,0 +1,120 @@
+---
+title: "yH2AX_analysis"
+output: html_document
+date: "2025-12-05"
+---
+
+```{r message=FALSE, warning=FALSE}
+library(pals)
+library(rstatix)
+library(ggpubr)
+library(ggbeeswarm)
+library(ggbreak)
+library(tidyverse)
+```
+
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+cell_lev <- c("HT1376", "SW780","UBLC1", "BFTC905")
+cell_cols <- unname(stepped3())[c(1,2,5,6)] %>% setNames(c("UBLC1", "BFTC905", "SW780", "HT1376"))
+
+time_lev <- c("vehicle", "0hr", "1hr", "4hr", "24hr", "48hr")
+time_cols <- c("snow3", rev(c("#8B0000",  "#DC143C", "#FF6B6B", "#FF9999", "#FFCCCC"))) %>% setNames(c("vehicle", "0hr", "1hr", "4hr", "24hr", "48hr"))
+
+wd <- '/Wet Lab/yH2AX_analysis/'
+fig <- '/Main_Figures/Figure4/yH2AX/'
+```
+
+## my April results ##
+
+```{r}
+base_dir <- "/Results_SLS_Apr2026"
+a <- c("vehicle", "0hr", "1hr", "4hr", "24hr", "48hr")
+
+# Find all subdirectories
+subdirs <- list.dirs(base_dir, recursive = FALSE, full.names = F)
+foci_dirs <- subdirs[!grepl("Snapshots|poorSegmentation", subdirs)]
+
+Apr_foci_df <- data.frame()
+
+for(d in foci_dirs){
+  COI <- str_match(d, regex(paste(cell_lev, collapse = "|"), ignore_case = T))[1,1]
+  timepoint <- str_match(d, regex(paste(a, collapse = "|"), ignore_case = T))[1,1]
+  f <- paste0(base_dir,"/", d, "/OnePageMultiComponent_Detailed_Statistics/Cell_OnePageMultiComponent_Detailed.csv")
+  
+  temp <- read.delim(f)
+  
+  if(nrow(temp) > 3){
+    df <- read.csv(f, skip = 3) %>%
+      select(Cell.Number.Of.Vesicles.VesicleType.Vesicles.Type.A) %>%
+      rename(foci_count = Cell.Number.Of.Vesicles.VesicleType.Vesicles.Type.A) %>%
+      mutate(Cell_line = COI, 
+             timepoint = timepoint)
+    
+    Apr_foci_df <- rbind(Apr_foci_df, df)
+  } else(foci_df <- rbind(foci_df, data.frame(foci_count = NA, Cell_line = COI, timepoint=timepoint)))
+}
+
+foci_df <- Apr_foci_df %>%
+  mutate(Cell_line = toupper(Cell_line), 
+         timepoint = case_match(timepoint, "Vehicle"~"vehicle", .default = timepoint), 
+         Cell_line = factor(Cell_line, levels=cell_lev), 
+         timepoint = factor(timepoint, levels=time_lev))
+  
+
+foci_summary <- foci_df %>%
+  group_by(Cell_line, timepoint) %>%
+  summarise(n_foci = n(), 
+            count_avg = mean(foci_count), 
+            count_sem = sd(foci_count)/sqrt(n()),
+              .groups = "drop")
+
+source_df <- foci_summary %>%
+  filter(timepoint!="1hr",
+         Cell_line %in% c("UBLC1", "SW780")) %>% select(Cell_line, timepoint, n_foci, count_avg, count_sem)
+#write.csv(source_df, '/Main_Figures/Figure4/source_data/4I_yH2AX_foci_counts.csv', row.names = F)
+```
+
+```{r}
+n_df <- foci_df %>%
+  select(Cell_line, timepoint) %>% table() %>% as.data.frame()
+
+#too few nuclei in 1hr image
+n_df %>%
+  ggplot(aes(x=Cell_line, y=Freq, group=timepoint)) +
+    geom_bar(stat="identity", position = "dodge", color="snow4", aes(fill=timepoint)) +
+    scale_fill_manual(values=time_cols) +
+    labs(x=NULL, y="# nuclei")
+
+
+#remove 1hr timepoint
+stat.test <- Apr_foci_df %>%
+  filter(timepoint!="1hr",
+         Cell_line %in% c("UBLC1", "SW780")) %>%
+  mutate(timepoint_num = case_match(timepoint, "vehicle"~-1, "0hr"~0, "4hr"~1, "24hr"~2, "48hr"~3)) %>%
+  group_by(timepoint_num) %>%
+  t_test(foci_count~Cell_line) %>%
+  mutate(padj = p.adjust(p, method = "fdr"))
+  add_xy_position() %>%
+  mutate(xmin=timepoint_num, xmax = timepoint_num)
+foci_summary %>%
+  filter(timepoint!="1hr",
+         Cell_line %in% c("UBLC1", "SW780")) %>%
+  mutate(timepoint_num = case_match(timepoint, "vehicle"~-1, "0hr"~0, "4hr"~1, "24hr"~2, "48hr"~3)) %>%
+  ggplot(aes(x=timepoint_num, y=count_avg)) +
+    geom_errorbar(aes(ymin=count_avg - count_sem, ymax=count_avg + count_sem), width=0.1) +
+    geom_point(aes(color=Cell_line)) +
+    geom_line(aes(color=Cell_line)) +
+    scale_color_manual(values=cell_cols) +
+    scale_x_continuous(breaks=seq(-1,3,1), labels=c("vehicle", "0hr",  "4hr", "24hr", "48hr"), name = NULL) +
+    scale_y_continuous(limits = c(0,300)) +
+    labs(y="Mean foci per nucleus")
+ggsave(paste0(fig, "April_yH2AX_UBLC1_SW780_no1hr.pdf"), width=5, height = 3)
+```
+

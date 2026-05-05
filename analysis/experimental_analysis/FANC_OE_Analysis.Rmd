@@ -1,0 +1,354 @@
+---
+title: "FANC_OE"
+output: html_document
+date: "2025-12-08"
+---
+
+libraries
+```{r message=FALSE, warning=FALSE}
+library(ggpubr)
+library(ggbeeswarm)
+library(rstatix)
+library(drc)
+library(broom)
+library(ggpmisc)
+library(qdapRegex)
+library(MESS)
+library(pals)
+library(tidyverse)
+```
+
+set up plotting
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+cis_cols <- c("#C6DBEF", "#FDD0A2") %>% setNames(c("Low","High"))
+cell_cols <- unname(stepped3())[c(1,2,5,6)] %>% setNames(c("UBLC1", "BFTC905", "SW780", "HT1376"))
+dose_cols <- c("#8B0000", "#DC143C", "#FF0000", "#FF9999", "#FFCCCC", "snow2") %>% setNames(c(20,10,5,2.5,1.25,0))
+OE_cols <- c("OE_Ctrl"="snow3", "OE_FANCF"="forestgreen", "OE_FANCA"="slateblue")
+
+dose_lev <- as.character(rev(c(20,10,5,2.5,1.25,0)))
+OE_lev <- c("OE_Ctrl", "OE_FANCA", "OE_FANCF")
+
+df1 <- data.frame(Cell_line = c("BFTC905", "UBLC1", "SW780", "HT1376"), FA = c("Low", "Low", "High", "High"))
+
+wd <- '/Wet Lab/IncuCyte Results/Revisions_FANC_OE/'
+sups <- '/Supplementary_Figures/Supplementary_Figure9-10_MutSigs/raw_images/FANC_OE/'
+sup_source <- '/Revision_1/Supplementary_Figures/Supplementary_Figure14_NEW/source_data/'
+```
+
+### IMPORT DATA ###
+
+import confluence data
+```{r}
+n_rep <- 3
+COI <- "UBLC1"
+
+# 4 technical replicate wells, of each dose in each OE
+mycol <- paste0(rep(c("OE_Ctrl", "OE_FANCA", "OE_FANCF"), each = 24),
+                          rep(c("_20uM", "_10uM", "_5uM", "_2.5uM", "_1.25uM", "_0uM"), 12), 
+                          rep(c("_1", "_2","_3","_4"), each = 6))
+mycol<- c("hr", mycol, "Cell_line", "bio_rep")
+
+my_dir <- paste0('//IncuCyte Results/Revisions_FANC_OE/Rep',1:n_rep,"_Data/")
+
+my_fl <- paste0(rep(COI, n_rep), "_FANC_OE_confluence_rep", rep(1:n_rep, each=2), ".txt")
+my_fl <- split(my_fl, rep(1:n_rep, each = 2))
+
+
+
+for(i in 1:n_rep){
+  d <- my_dir[i]
+  f <- my_fl[[i]]
+  c <- mycol
+  
+  #read in data per dose per tech rep
+
+    
+      assign(paste0(COI, "_conf_rep", i), 
+             read_delim(paste0(d, f), delim = "\t", escape_double = FALSE, trim_ws = TRUE, skip = 7, show_col_types = F)[,2:74] %>% 
+               mutate(Elapsed = as.numeric(Elapsed), Cell_line = COI, bio_rep = as.character(i)) %>%
+               `colnames<-`(c) %>%
+               pivot_longer(cols=starts_with("OE"), names_to = "OE_dose_rep", values_to = "PhaseConf") %>% 
+              extract(OE_dose_rep, into = c("OE", "dose", "tech_rep"),
+                                    regex = "(OE_[^_]+)_([0-9.]+)uM_(\\d+)",
+                                    remove = T) %>%
+               select(Cell_line,bio_rep, hr, OE, dose, tech_rep, PhaseConf))
+}
+
+#combine the cell lines together
+UBLC1_dfs <- lapply(1:n_rep, function(i) get(paste0("UBLC1_conf_rep", i)))
+conf_all <- do.call(rbind, c(UBLC1_dfs))
+
+#normalize each well to its 0hr conf (allows better comparison across all wells)
+conf_all <- conf_all %>%
+  group_by(Cell_line,OE, dose, bio_rep, tech_rep)  %>%
+  mutate(conf_normalized = PhaseConf / PhaseConf[hr == 0], 
+         conf_0norm_100norm = conf_normalized / max(conf_normalized), 
+         conf_100norm = PhaseConf / max(PhaseConf)) %>%
+  ungroup()
+  
+#collapse each dose/hr by taking mean of tech replicates
+conf_collapsed <- conf_all %>%
+  group_by(Cell_line,bio_rep,OE, hr, dose) %>%
+  summarise(Cell_line = unique(Cell_line), 
+            OE = unique(OE),
+            hr = unique(hr), 
+            dose = unique(dose), 
+            PhaseConf_avg = mean(PhaseConf), 
+            PhaseConf_sem = sd(PhaseConf)/sqrt(n()),
+            conf_norm_avg = mean(conf_normalized), 
+            conf_norm_sem = sd(conf_normalized)/sqrt(n())) %>% ungroup()
+
+#normalize each time point so that the highest conf is at 100 (allows better comparison across cell lines)
+conf_collapsed <- conf_collapsed %>%
+  group_by(Cell_line,OE, hr, bio_rep) %>%
+  mutate(conf_0norm_100norm = conf_norm_avg / max(conf_norm_avg), 
+         conf_100norm = PhaseConf_avg / max(PhaseConf_avg)) %>% ungroup() %>%
+  filter(OE!="OE_FANCA")
+
+do.call(rm, list(list = c(paste0("UBLC1_conf_rep", 1:n_rep))))
+#write.csv(conf_collapsed, paste0(wd, "ALLREP_PhaseConf_collapsed.csv"), row.names = F)
+```
+
+import cytotox data
+```{r}
+count_fl <- paste0("UBLC1_FANC_OE_RedCount_rep", rep(1:n_rep), ".txt")
+
+for(i in 1:n_rep){
+  d <- my_dir[i]
+  f_count <- count_fl[[i]]
+  c <- mycol
+  
+  #read in data per dose per tech rep
+  assign(paste0(COI, "_redCount_df"), 
+         read_delim(paste0(d, f_count), delim = "\t", escape_double = FALSE, trim_ws = TRUE, skip = 7, show_col_types = F)[,2:74] %>% 
+           mutate(Elapsed = as.numeric(Elapsed), Cell_line = COI, bio_rep = as.character(i)) %>%
+           `colnames<-`(c) %>%
+           pivot_longer(cols=starts_with("OE"), names_to = "OE_dose_rep", values_to = "RedCount") %>% 
+           extract(OE_dose_rep, into = c("OE", "dose", "tech_rep"),
+                                regex = "(OE_[^_]+)_([0-9.]+)uM_(\\d+)",
+                                remove = T) %>%
+           select(Cell_line,bio_rep, hr, OE, dose, tech_rep, RedCount))
+
+  
+  count_df <- UBLC1_redCount_df
+  
+  assign(paste0("rep",i,"_red"), count_df)
+}
+
+#combine the cell lines together
+dfs <- lapply(1:n_rep, function(i) get(paste0("rep", i, "_red")))
+red_all <- do.call(rbind, dfs)
+
+#normalize to phase conf per well
+red_all <- red_all %>% left_join(conf_all)  %>%
+  mutate(RedCount_PhaseConf = RedCount/PhaseConf) 
+  
+#collapse each dose/hr by taking mean of tech replicates
+red_collapsed <- red_all %>%
+  group_by(Cell_line,OE, bio_rep, hr, dose) %>%
+  summarise(Cell_line = unique(Cell_line), 
+            OE = unique(OE),
+            hr = unique(hr), 
+            dose = unique(dose), 
+            across(starts_with("Red"), 
+                   list(avg = ~mean(.x, na.rm=T),
+                        sem = ~sd(.x, na.rm=T)/sqrt(sum(!is.na(.x)))),
+                   .names = "{.col}_{.fn}")) %>% 
+  ungroup()%>%
+  filter(OE!="OE_FANCA")
+
+#clean environment
+rm(UBLC1_redCount_df, count_df, dfs, UBLC1_dfs, rep1_red, rep2_red, rep3_red)
+rm(count_fl, my_fl, mycol, c, d, f, f_count, my_dir)
+
+#write out
+#write.csv(red_collapsed, paste0(wd, "ALLREP_Red_collapsed.csv"), row.names = F)
+```
+
+
+### CONFLUENCE AUC ###
+
+confluence AUC
+```{r}
+hr_use <- 24
+
+AUC_df <- conf_collapsed %>%
+  mutate(dose = as.numeric(dose)) %>%
+  filter(hr==hr_use) %>%
+  group_by(Cell_line, bio_rep, OE) %>%
+  summarise(conf_0norm_100norm_AUC = auc(dose, conf_0norm_100norm)) %>% ungroup() %>%
+  mutate(hr = hr_use)
+write.csv(AUC_df, paste0(sup_source, "S14H_rightBoxplot_UBLC1_FANCFOE_Conf_AUC.csv"), row.names = F)
+
+
+#conf_0norm_100norm AUC - UBLC1 24hr FANC no color
+AUC_df %>%
+  group_by(OE) %>% summarise(med=median(conf_0norm_100norm_AUC))
+stat.test <- AUC_df %>%
+  mutate(OE = factor(OE, levels=OE_lev[c(1,3)])) %>%
+  arrange(bio_rep, OE) %>%
+  t_test(conf_0norm_100norm_AUC~OE, ref.group = "OE_Ctrl", paired = T) %>%
+  add_xy_position(step.increase = 0.3)
+AUC_df %>%
+  mutate(OE = factor(OE, levels=OE_lev[c(1,3)])) %>%
+  ggplot(aes(x=OE, y=conf_0norm_100norm_AUC)) +
+    geom_boxplot(outlier.shape=NA, aes(fill=OE), show.legend = F) +
+    geom_quasirandom( size=3) +
+    stat_pvalue_manual(stat.test, label="p", tip.length = 0) +
+    scale_fill_manual(values=OE_cols) +
+    labs(caption="t-test p-val")+
+    scale_y_continuous(limits = c(10,13))
+ggsave(paste0(wd, "PhaseConf_AUC_conf0norm100norm_boxplot_UBLC1_24hr_rep123.pdf"), width=3, height=4)
+ggsave(paste0(sups, "PhaseConf_AUC_conf0norm100norm_boxplot_UBLC1_24hr_rep123.pdf"), width=3, height=4)
+```
+
+graph AUC/IC50 curves - UBLC1 24hr combining bio reps
+```{r}
+x_shift <-0.9
+
+#summarize reps 1-3
+df <- conf_collapsed %>%
+  filter(hr==24) %>%
+  mutate(dose = as.numeric(dose)) %>%
+  group_by(OE, dose) %>%
+  summarise(conf_0norm_100norm_bioavg = mean(conf_0norm_100norm), 
+            conf_0norm_100norm_biosem = sd(conf_0norm_100norm)/sqrt(3), .groups = "drop") 
+write.csv(df, paste0(sup_source, "S14H_left_UBLC1_FANCFOE_Conf_DoseResponseCurve.csv"), row.names = F)
+  
+#make curves - 4 parameter model
+fit_df <- drm(data = df,
+    formula = conf_0norm_100norm_bioavg~dose,
+    curveid = OE,
+    fct=LL.4(names=c("Hill Slope", "Min", "Max", "IC50")))
+
+#get datapoints along fitted curves
+fit_data <- data.frame(x_val = rep(seq(0,20,0.2), 2), 
+           OE = rep(unique(df$OE), each=length(seq(0,20,0.2)))
+           ) %>% mutate(Cell_line = "UBLC1", hr=24)
+fit_data$predict_value <- predict(fit_df, newdata = fit_data)
+
+#graph fitted curves with actual data
+df %>% 
+  ggplot(aes(x=dose+x_shift, y=conf_0norm_100norm_bioavg, color=OE)) +
+    geom_errorbar(aes(ymin=conf_0norm_100norm_bioavg-conf_0norm_100norm_biosem, ymax = conf_0norm_100norm_bioavg+conf_0norm_100norm_biosem), width=0.2) +
+    geom_point() +
+    geom_line() +
+    geom_line(data=fit_data,
+              aes(x=x_val+x_shift, y=predict_value, color=OE), 
+              linetype="dashed", inherit.aes = FALSE) +
+    theme_bw() +
+    scale_color_manual(values=OE_cols) +
+    scale_x_continuous(transform="log2", breaks=as.numeric(dose_lev)+x_shift, labels=dose_lev) +
+    labs(title="UBLC1 @ 24hr", x="uM Cisplatin", y="Confluence (normalized to 0hr)", subtitle = "SEM error bars, 4 param model, bio reps 1-3")
+ggsave(paste0(wd, "PhaseConf_IC50_conf0norm100_combinedDoseResponse_UBLC1_FANCF_24hr.pdf"), width=5, height=4)
+ggsave(paste0(sups, "PhaseConf_IC50_conf0norm100_combinedDoseResponse_UBLC1_FANCF_24hr.pdf"), width=5, height=4)
+```
+
+### CYTOTOX AUC ### 
+
+cytotox AUC
+```{r}
+hr_use <- 72
+
+red_AUC_df <- red_collapsed %>%
+  mutate(dose = as.numeric(dose)) %>%
+  filter(hr==hr_use, OE!="OE_FANCA") %>%
+  group_by(bio_rep, Cell_line) %>%
+  mutate(RedCount_PhaseConf_normMax = RedCount_PhaseConf_avg / max(RedCount_PhaseConf_avg)) %>% ungroup() %>%
+  group_by(Cell_line, bio_rep, OE) %>%
+  summarise(RedCount_PhaseConf_normMax_AUC = auc(dose, RedCount_PhaseConf_normMax),
+            RedCount_PhaseConf_AUC = auc(dose, RedCount_PhaseConf_avg), 
+            RedCount_AUC = auc(dose, RedCount_avg)) %>% ungroup() %>%
+  mutate(hr = hr_use)
+
+```
+
+graph dose response with RedCount_PhaseConf_normMax - UBLC1 FANCF 72hr - combining bio reps 1-3
+```{r}
+df <- red_collapsed %>%
+  filter(hr==hr_use) %>%
+  mutate(dose = as.numeric(dose)) %>%
+  group_by(bio_rep) %>%
+  mutate(RedCount_PhaseConf_normMax = RedCount_PhaseConf_avg / max(RedCount_PhaseConf_avg)) %>% ungroup() %>%
+  group_by(dose, OE) %>%
+  summarise(RedCount_PhaseConf_normMax_bioavg = mean(RedCount_PhaseConf_normMax), 
+            RedCount_PhaseConf_normMax_biosem = sd(RedCount_PhaseConf_normMax)/sqrt(3), .groups = "drop") 
+write.csv(df, paste0(sup_source, "S14I_left_UBLC1_FANCFOE_Cytotox_DoseResponseCurve.csv"), row.names = F)
+
+df %>%
+  ggplot(aes(x=dose+x_shift, y=RedCount_PhaseConf_normMax_bioavg, color=OE)) +
+    geom_errorbar(aes(ymin = RedCount_PhaseConf_normMax_bioavg - RedCount_PhaseConf_normMax_biosem, ymax=RedCount_PhaseConf_normMax_bioavg + RedCount_PhaseConf_normMax_biosem), width=0.2) +
+    geom_point() +
+    geom_line() +
+    theme_bw() +
+    scale_x_continuous(transform="log2", breaks=as.numeric(dose_lev)+x_shift, labels=dose_lev) +
+    scale_color_manual(values=OE_cols) +
+    labs(x="uM Cisplatin", title="UBLC1 @ 72hr", subtitle="bio reps 1-3", caption= "SEM error bars")
+ggsave(paste0(wd, "Red_AUC_RedCount_PhaseConf_normMax_UBLC1_72hr_combinedDoseResponse.pdf"), width=6, height=5)
+ggsave(paste0(sups, "Red_AUC_RedCount_PhaseConf_normMax_UBLC1_72hr_combinedDoseResponse.pdf"), width=6, height=5)
+```
+
+AUC boxplots- UBLC1 FANCF 72hr
+```{r}
+#RedCount_PhaseConf_normMax AUC - UBLC1 72hr FANC
+df <- red_AUC_df %>%
+  filter(hr==hr_use) %>%
+  mutate(OE = factor(OE, levels=OE_lev[c(1,3)])) %>%
+  select(Cell_line, bio_rep, OE, hr, RedCount_PhaseConf_normMax_AUC)
+write.csv(df, paste0(sup_source, "S14I_rightBoxplot_UBLC1_FANCFOE_Cytotox_AUC.csv"), row.names = F)
+
+red_AUC_df %>%
+  filter(hr==hr_use) %>%
+  group_by(OE) %>% summarise(med = median(RedCount_PhaseConf_normMax_AUC))
+stat.test <- red_AUC_df %>%
+  filter(hr==hr_use) %>%
+  mutate(OE = factor(OE, levels=OE_lev[c(1,3)])) %>%
+  arrange(bio_rep, OE) %>%
+  t_test(RedCount_PhaseConf_normMax_AUC~OE, ref.group = "OE_Ctrl", paired = T) %>%
+  add_xy_position(step.increase = 0.5)
+df %>%
+  ggplot(aes(x=OE, y=RedCount_PhaseConf_normMax_AUC)) +
+    geom_boxplot(outlier.shape=NA, aes(fill=OE), show.legend = F) +
+    geom_quasirandom( size=3) +
+    stat_pvalue_manual(stat.test, label="p", tip.length = 0) +
+    coord_cartesian(ylim=c(12.5, 17)) +
+    scale_fill_manual(values=OE_cols) +
+    labs(caption="paired t-test p-val", title="UBLC1 @ 72hr", subtitle = "bio reps 1-3")
+ggsave(paste0(wd, "Red_AUC_RedCount_PhaseConf_normMax_boxplot_UBLC1_72hr_2.pdf"), width=3, height=5)
+ggsave(paste0(sups, "Red_AUC_RedCount_PhaseConf_normMax_boxplot_UBLC1_72hr_2.pdf"), width=3, height=5)
+```
+
+
+### OE QUANTIFICATION ###
+
+import qPCR data
+```{r}
+#reformatted from: '/FANC overexpression/qPCR results_FANC-OE.xlsx'
+qpcr <- read.csv('/IncuCyte Results/Revisions_FANC_OE/qPCR_rep123.csv') %>%
+  filter(Cell_line=="UBLC1", OE!="OE_FANCA", target=="FANCF")
+
+write.csv(qpcr, paste0(sup_source, "S14F_UBLC1_FANCFOE_qPCR.csv"), row.names = F)
+```
+
+graph FANCF OE
+```{r}
+#UBLC1 (median OE = 22x, mean OE = 17x)
+qpcr %>%
+  group_by(OE) %>% summarise(median=median(expn), mean = mean(expn))
+qpcr  %>%
+  ggplot(aes(x=OE, y=expn)) +
+    geom_boxplot(aes(fill=OE), outlier.shape = NA, show.legend = F) +
+    geom_quasirandom(size=3) +
+    scale_fill_manual(values=OE_cols) +
+    labs(y="FANCF RNA Expn (norm to GAPDH)", title="UBLC1 FANCF OE", caption="median = 22x, mean = 17x")
+ ggsave(paste0(wd, "FANCF_OE_qPCR_UBLC1.pdf"), width=3, height=4)
+ ggsave(paste0(sups, "FANCF_OE_qPCR_UBLC1.pdf"), width=3, height=4)
+```
+

@@ -1,0 +1,356 @@
+---
+title: "siFANC_Analysis"
+output: html_document
+date: "2025-10-28"
+---
+
+libraries
+```{r message=F, warning=F}
+library(qdapRegex)
+library(pals)
+library(forcats)
+library(drc)
+library(broom)
+library(ggpmisc)
+library(rstatix)
+library(MESS)
+library(ggbeeswarm)
+library(ggpubr)
+library(tidyverse)
+```
+
+set up plotting
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+cis_cols <- c("#C6DBEF", "#FDD0A2") %>% setNames(c("Low","High"))
+cell_cols <- unname(stepped3())[c(1,2,5,6)] %>% setNames(c("UBLC1", "BFTC905", "SW780", "HT1376"))
+dose_cols <- c("#8B0000", "#DC143C", "#FF0000", "#FF9999", "#FFCCCC", "snow2") %>% setNames(c(20,10,5,2.5,1.25,0))
+si_cols <- c("siNTC"="snow3", "siFANCF"="forestgreen", "siFANCA"="slateblue")
+rep_cols <- unname(trubetskoy())[1:5] %>% setNames(as.character(1:5))
+rep_col <- unname(trubetskoy())[1:5] %>% setNames(as.character(1:5))
+
+doses <- sort(as.numeric(names(dose_cols)))
+
+wd <- '/IncuCyte Results/Revisions_siFANC/'
+figs <- '/Main_Figures/Figure4/siFANCF/'
+fig_source <- '/Main_Figures/Figure4/source_data/'
+
+sups <- '/Revision_1/Supplementary_Figures/Supplementary_Figure14_NEW/raw_images/siFANC/'
+sup_source <- '/Revision_1/Supplementary_Figures/Supplementary_Figure14_NEW/source_data/'
+```
+
+### IMPORT DATA ###
+
+import phase conf data
+```{r}
+# 4 technical replicate wells, of each dose in each siRNA
+mycol <- paste0(rep(c("siNTC", "siFANCA", "siFANCF"), each = 24),
+                          rep(c("_20uM", "_10uM", "_5uM", "_2.5uM", "_1.25uM", "_0uM"), 12), 
+                          rep(c("_1", "_2","_3","_4"), each = 6))
+mycol<- c("hr", mycol, "Cell_line", "bio_rep")
+
+my_dir <- paste0('/IncuCyte Results/Revisions_siFANC/Rep',2:5,"_Data/")
+my_fl <- paste0(rep("SW780", 4), "_siFANC_confluence_rep", rep(2:5), ".txt")
+COI <- "SW780"
+
+for(i in 1:length(my_dir)){
+  d <- my_dir[i]
+  f <- my_fl[[i]]
+  c <- mycol
+  r <- i+1
+  
+  #read in data 
+  assign(paste0("SW780_conf_rep", r), 
+         read_delim(paste0(d, f), delim = "\t", escape_double = FALSE, trim_ws = TRUE, skip = 7, show_col_types = F)[,2:74] %>% 
+           mutate(Elapsed = as.numeric(Elapsed), Cell_line = "SW780", bio_rep = as.character(r)) %>%
+           `colnames<-`(c) %>%
+           pivot_longer(cols=starts_with("si"), names_to = "si_dose_rep", values_to = "PhaseConf") %>%
+          mutate(siRNA = paste0("si", ex_between(si_dose_rep, "si", "_")),
+                 dose = as.character(ex_between(si_dose_rep, "_","uM")),
+                 tech_rep = as.character(substr(si_dose_rep, nchar(si_dose_rep), nchar(si_dose_rep)))) %>%
+           select(Cell_line,bio_rep, hr, siRNA, dose, tech_rep, PhaseConf))
+}
+
+#combine together
+conf_all <- rbind(SW780_conf_rep2, SW780_conf_rep3, SW780_conf_rep4, SW780_conf_rep5)
+
+#normalize each well to its 0hr conf (allows better comparison across all wells)
+conf_all <- conf_all %>%
+  group_by(Cell_line,siRNA, dose, bio_rep, tech_rep)  %>%
+  mutate(conf_normalized = PhaseConf / PhaseConf[hr == 0], 
+         conf_0norm_100norm = conf_normalized / max(conf_normalized), 
+         conf_100norm = PhaseConf / max(PhaseConf)) %>%
+  ungroup()
+  
+#collapse each dose/hr by taking mean of tech replicates
+conf_collapsed <- conf_all %>%
+  group_by(Cell_line,bio_rep,siRNA, hr, dose) %>%
+  summarise(Cell_line = unique(Cell_line), 
+            siRNA = unique(siRNA),
+            hr = unique(hr), 
+            dose = unique(dose), 
+            PhaseConf_avg = mean(PhaseConf), 
+            PhaseConf_sem = sd(PhaseConf)/sqrt(n()),
+            conf_norm_avg = mean(conf_normalized), 
+            conf_norm_sem = sd(conf_normalized)/sqrt(n())) %>% ungroup()
+
+#normalize each time point so that the highest conf is at 100 (allows better comparison across cell lines)
+conf_collapsed <- conf_collapsed %>%
+  group_by(Cell_line,siRNA, hr, bio_rep) %>%
+  mutate(conf_0norm_100norm = conf_norm_avg / max(conf_norm_avg), 
+         conf_100norm = PhaseConf_avg / max(PhaseConf_avg)) %>% ungroup()
+
+rm(SW780_conf_rep2, SW780_conf_rep3, SW780_conf_rep4, SW780_conf_rep5)
+#write.csv(conf_collapsed, paste0(wd, "ALLREP_PhaseConf_collapsed.csv"), row.names = F)
+
+```
+
+import red data
+```{r}
+count_fl <- paste0(rep("SW780", 4), "_siFANC_RedCount_rep", 2:5, ".txt")
+
+COI <- "SW780"
+
+for(i in 1:length(my_dir)){
+  d <- my_dir[i]
+  c <- mycol
+  cf <- count_fl[i]
+  r <- i+1
+  
+  #read in Red Area data (per dose per tech rep)
+  assign(paste0(COI, "_redCount_rep", r), 
+           read_delim(paste0(d, cf), delim = "\t", escape_double = FALSE, trim_ws = TRUE, skip = 7, show_col_types = F)[,2:74] %>% 
+             mutate(Elapsed = as.numeric(Elapsed), Cell_line = COI, bio_rep=as.character(r)) %>%
+             `colnames<-`(c) %>%
+             pivot_longer(cols=starts_with("si"), names_to = "si_dose_rep", values_to = "RedCount") %>%
+            mutate(siRNA = paste0("si", ex_between(si_dose_rep, "si", "_")),
+                   dose = as.character(ex_between(si_dose_rep, "_","uM")),
+                   tech_rep = as.character(substr(si_dose_rep, nchar(si_dose_rep), nchar(si_dose_rep)))) %>%
+             select(Cell_line,bio_rep, hr, siRNA, dose, tech_rep, RedCount))
+
+}
+
+#combine bio reps together
+redCount <- rbind(SW780_redCount_rep2, SW780_redCount_rep3, SW780_redCount_rep4, SW780_redCount_rep5)
+red_all <- redCount %>% left_join(conf_all)
+
+#normalize each well
+red_all <- red_all %>%
+  group_by(Cell_line,bio_rep,siRNA, dose, tech_rep)  %>%
+  mutate(RedCount_norm0 = RedCount / RedCount[hr==0], 
+         RedCount_PhaseConf = RedCount / PhaseConf,
+         RedCount_normPhaseConf = RedCount / conf_normalized) %>%
+  ungroup()
+  
+#collapse each dose/hr by taking mean of tech replicates
+red_collapsed <- red_all %>%
+  group_by(Cell_line,bio_rep,siRNA, hr, dose) %>%
+  summarise(Cell_line = unique(Cell_line), 
+            siRNA = unique(siRNA),
+            hr = unique(hr), 
+            dose = unique(dose), 
+            across(starts_with("Red"), 
+                   list(avg = ~mean(.x, na.rm=T),
+                                            sem = ~sd(.x, na.rm=T)/sqrt(sum(!is.na(.x)))),
+                   .names = "{.col}_{.fn}")) %>% 
+  ungroup() %>%
+  group_by(Cell_line,bio_rep, hr, siRNA) %>%
+  mutate(RedCount_norm0uM_avg = RedCount_avg/RedCount_avg[dose == "0"],
+         RedCount_PhaseConf_norm0uM_avg = RedCount_PhaseConf_avg/RedCount_PhaseConf_avg[dose == "0"],) %>% ungroup()
+
+rm(SW780_redCount_rep2, SW780_redCount_rep3, SW780_redCount_rep4, SW780_redCount_rep5)
+
+#write.csv(red_collapsed, paste0(wd, "ALLREP_Red_collapsed.csv"), row.names = F)
+```
+
+### GRAPHING CONFLUENCE ###
+
+calculating AUCs
+```{r}
+combined_AUC <- data.frame()
+
+hr_use <- 72
+
+#calculate AUCs
+for(i in 2:5){
+  df <- conf_collapsed %>% 
+    filter(bio_rep==as.character(i), hr==hr_use) %>%
+    mutate(dose = as.numeric(dose), 
+           cell_line_siRNA = paste0(Cell_line, "_", siRNA))
+  
+  #calculate trapezoidal AUC
+  df_AUC <- df %>%
+    group_by(Cell_line,siRNA, bio_rep) %>%
+    summarise(conf_0norm_100norm_AUC = round(auc(dose, conf_0norm_100norm), 3)) %>% ungroup() 
+  
+   combined_AUC <- combined_AUC %>% bind_rows(df_AUC %>% mutate(bio_rep=i, hr=hr_use))
+
+}
+
+combined_AUC <- combined_AUC %>% filter(siRNA %in% c("siNTC", "siFANCF"))
+write.csv(combined_AUC, paste0(fig_source, "4K_SW780_siFANCF_PhaseConf_AUC.csv"), row.names = F)
+```
+
+graph SW780 siFANCF combined curve
+```{r}
+x_shift <-0.5
+doses <- as.numeric(names(dose_cols))
+
+df <- conf_collapsed %>%
+  filter(siRNA!="siFANCA", hr==72) %>%
+  group_by(siRNA, dose) %>%
+  summarise(conf_avg=mean(conf_0norm_100norm), 
+            conf_sem = sd(conf_0norm_100norm)/sqrt(n()), .groups = "drop") %>%
+  mutate(dose = as.numeric(dose))
+write.csv(df, paste0(sup_source, "S14D_SW780_DoseResponse_FitCurves.csv"), row.names = F)
+
+#make curves - 4 parameter model
+fit_df <- drm(data = df,
+    formula = conf_avg~dose,
+    curveid = siRNA,
+    fct=LL.4(names=c("Hill Slope", "Min", "Max", "IC50")))
+
+
+#get datapoints along fitted curves
+fit_data <- data.frame(x_val = rep(seq(0,40,0.2), 6), 
+         siRNA = rep(unique(df$siRNA), each=length(seq(0,40,0.2)))
+         ) %>% left_join(data.frame(Cell_line=rep("SW780", 2), siRNA=c("siNTC", "siFANCF")))
+fit_data$predict_value <- predict(fit_df, newdata = fit_data)
+  
+#graph fitted curves with actual data ***Fig S14D***
+df %>% 
+  ggplot(aes(x=dose+x_shift, y=conf_avg, color=siRNA)) +
+    geom_errorbar(aes(ymin=conf_avg-conf_sem, ymax=conf_avg+conf_sem), width = 0.2) +
+    geom_point() +
+    geom_line() +
+    geom_line(data=fit_data,
+              aes(x=x_val+x_shift, y=predict_value, color=siRNA), 
+              linetype="dashed", inherit.aes = FALSE) +
+    theme_bw() +
+    scale_color_manual(values=si_cols) +
+    scale_x_continuous(transform = "log2", breaks = doses+x_shift, labels=doses) +
+    labs(x="Dose", y="Confluence")
+#ggsave(paste0(wd, "SW780_DoseResponse_FitCurves_4param_allBioRepsCombined.pdf"), width=4, height=3)
+#ggsave(paste0(sups, "SW780_DoseResponse_FitCurves_4param_allBioRepsCombined.pdf"), width=4, height=3)
+```
+
+graph AUC (boxplots) *** Fig 4K ***
+```{r}
+#graph AUC - SW780 FANCF
+combined_AUC %>%
+  group_by(siRNA) %>%
+  summarise(median = median(conf_0norm_100norm_AUC))
+stat.test <- combined_AUC %>%
+  mutate(siRNA = factor(siRNA, levels=c("siNTC", "siFANCF"))) %>%
+  arrange(Cell_line, bio_rep, siRNA) %>%
+  group_by(Cell_line) %>%
+  t_test(conf_0norm_100norm_AUC~siRNA, ref.group = "siNTC", paired = T) %>%
+  add_xy_position(step.increase = 0.05)
+wp <- combined_AUC %>%
+  mutate(siRNA = factor(siRNA, levels=c("siNTC", "siFANCF"))) %>%
+  arrange(Cell_line, bio_rep, siRNA) %>%
+  group_by(Cell_line) %>%
+  wilcox_test(conf_0norm_100norm_AUC~siRNA, ref.group = "siNTC", paired = T) %>% pull(p)
+combined_AUC %>%
+  mutate(siRNA = factor(siRNA, levels=c("siNTC", "siFANCF"))) %>%
+  ggplot(aes(x=siRNA, y=conf_0norm_100norm_AUC)) +
+    geom_boxplot(outlier.shape=NA, aes(fill=siRNA), show.legend = F) +
+    geom_quasirandom(size=3) +
+    stat_pvalue_manual(stat.test, label="p", tip.length = 0) +
+    scale_fill_manual(values=si_cols) +
+    labs(caption=paste0("t-test p-val; wilcox=", wp), y="AUC (uM)", title="SW780 Confluence Response at 72hr") +
+    scale_y_continuous(limits=c(0,15))
+#ggsave(paste0(wd, "PhaseConf_AUC_4param_boxplot_SW780.pdf"), width=3, height=3.3)
+#ggsave(paste0(figs, "PhaseConf_AUC_4param_boxplot_SW780.pdf"),width=2.3, height=4)
+```
+
+
+### GRAPHING RED AUC ###
+```{r}
+x_shift <- 0.5
+
+#RedCount_PhaseConf_norm0uM + normMax
+red_df <- red_collapsed %>%
+  filter(siRNA!="siFANCA", hr ==48)
+
+red_AUC <- red_df %>%
+  mutate(dose = as.numeric(dose)) %>%
+  group_by(siRNA, bio_rep, hr) %>%
+  summarise(RedCount_PhaseConf_norm0uM_AUC = round(auc(dose, RedCount_PhaseConf_norm0uM_avg), 3), .groups = "drop") 
+write.csv(red_AUC, paste0(fig_source, "4L_SW780_siFANCF_Cytotox_AUC_48hr.csv"), row.names = F)
+
+red_df_summary <- red_df %>%
+  group_by(siRNA, hr, dose) %>%
+  summarise(Cell_line=unique(Cell_line), 
+            RedCount_PhaseConf_norm0uM_bioavg = mean(RedCount_PhaseConf_norm0uM_avg), 
+            RedCount_PhaseConf_norm0uM_biosem = sd(RedCount_PhaseConf_norm0uM_avg)/sqrt(n()), .groups = "drop")
+write.csv(red_df_summary, paste0(sup_source, "S14E_SW780_siFANCF_Cytotox_DoseResponse_Curve.csv"), row.names = F)
+
+# ***Fig S14E***
+red_df_summary %>%
+  ggplot(aes(x=as.numeric(dose)+x_shift, y=RedCount_PhaseConf_norm0uM_bioavg, color=siRNA)) +
+    geom_errorbar(aes(ymin=RedCount_PhaseConf_norm0uM_bioavg-RedCount_PhaseConf_norm0uM_biosem, ymax=RedCount_PhaseConf_norm0uM_bioavg+RedCount_PhaseConf_norm0uM_biosem), width=0.3) +
+    geom_point() +
+    geom_line() +
+    theme_bw() +
+    scale_x_continuous(transform = "log2", breaks=doses+x_shift, labels=doses) +
+    scale_color_manual(values=si_cols) +
+    labs(x="Dose", title=paste0("SW780 RedCount PhaseNorm norm0uM @48hr"), y="Cytotox")
+#ggsave(paste0(wd, "Red_DoseResponse_BioRepsCombinedCurve_RedCount_PhaseConf_norm0uM_48hr.pdf"), width=4, height=3)
+#ggsave(paste0(sups, "Red_DoseResponse_BioRepsCombinedCurve_RedCount_PhaseConf_norm0uM_48hr.pdf"), width=4, height=3)
+
+#RedCount_PhaseConf_norm0uM AUC @ 48hr ***Fig 4L***
+stat.test <- red_AUC %>%
+  mutate(siRNA = factor(siRNA, levels=c("siNTC", "siFANCF"))) %>%
+  arrange(hr, siRNA, bio_rep) %>%
+  t_test(RedCount_PhaseConf_norm0uM_AUC~siRNA, paired = T) %>%
+  add_xy_position()
+red_AUC %>%
+  mutate(siRNA = factor(siRNA, levels=c("siNTC", "siFANCF"))) %>%
+  ggplot(aes(x=siRNA, y= RedCount_PhaseConf_norm0uM_AUC)) +
+    geom_boxplot(aes(fill=siRNA), outlier.shape = NA, show.legend = F) +
+    geom_quasirandom(size=3, shape=16) +
+    scale_fill_manual(values=si_cols) +
+    scale_y_continuous(expand = expansion(mult=c(0.05,0.15))) +
+    stat_pvalue_manual(stat.test, tip.length = 0) +
+    labs(title="SW780: RedCount PhaseConf norm0uM @48hr", caption="paired t-test p-val", y="AUC")
+#ggsave(paste0(wd, "Red_AUC_RedCount_PhaseConf_norm0uM_SW780_FANCF_48hr.pdf"), width=4, height=6)
+#ggsave(paste0(figs, "Red_AUC_RedCount_PhaseConf_norm0uM_SW780_FANCF_48hr.pdf"), width=2.3, height=4)
+
+```
+
+
+### siFANC KD EFFICIENCY ###
+```{r}
+KD_df <- read.csv('/IncuCyte Results/Revisions_siFANC/siFANC_KD_quant.csv')
+
+KD_df <- KD_df %>%
+  mutate(siRNA_match_target = case_when(siRNA=="siNTC"~"yes", substr(siRNA,3,7)==target_assessing~"yes", .default = "no"), 
+         siRNA = factor(siRNA, levels=c("siNTC", "siFANCA", "siFANCF")), 
+         bio_rep=as.character(bio_rep)) %>%
+  filter(type=="qPCR", siRNA_match_target=="yes", Cell_line=="SW780", target_assessing=="FANCF")
+
+write.csv(KD_df, paste0(sup_source, "S14B_SW780_siFANCF_qPCR_KD.csv"), row.names = F)
+```
+
+```{r}
+#SW780 FANCF - qPCR **Fig S14B**
+KD_df %>%
+  group_by(siRNA) %>% summarise(avg = mean(RNA_FC))
+KD_df %>% 
+  ggplot(aes(x=siRNA, y=RNA_FC)) +
+    geom_boxplot(outlier.shape = NA, aes(fill=siRNA), show.legend = F) +
+    geom_quasirandom(size=3, alpha=0.8, shape=16) +
+    scale_fill_manual(values=si_cols) +
+    scale_y_continuous(limits = c(0,1)) +
+    labs(y="Fold-change in FANCF RNA\n(normalized to GAPDH)", caption="avg siFANCF=0.16")
+ ggsave(paste0(wd, "siFANCF_SW780_KD_qPCR_quant.pdf"), width=2, height=3)
+ ggsave(paste0(sups, "siFANCF_SW780_KD_qPCR_quant.pdf"), width=2, height=3)
+ 
+```

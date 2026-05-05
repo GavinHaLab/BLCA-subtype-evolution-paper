@@ -1,0 +1,383 @@
+---
+title: "MMC_Analysis"
+output: html_document
+date: "2025-10-21"
+---
+
+libraries
+```{r message=F, warning=F}
+library(qdapRegex)
+library(pals)
+library(forcats)
+library(drc)
+library(broom)
+library(ggpmisc)
+library(rstatix)
+library(MESS)
+library(ggbeeswarm)
+library(ggpubr)
+library(tidyverse)
+```
+
+set up plotting
+```{r}
+theme_set(theme_classic() + 
+            border() +
+            theme(axis.text = element_text(color="black"),
+                  rect = element_rect(fill = NULL),
+                  legend.key = element_rect(color = NA),
+                  axis.ticks = element_line(color="black")))
+
+cis_cols <- c("#C6DBEF", "#FDD0A2") %>% setNames(c("FA_low","FA_high"))
+cell_cols <- unname(stepped3())[c(1,2,5,6)] %>% setNames(c("UBLC1", "BFTC905", "SW780", "HT1376"))
+dose_cols <- c("#8B0000", "#B22222", "#DC143C", "#FF0000", "#FF6B6B", "#FF9999", "#FFCCCC", "snow2") %>% setNames(c(10,5,2.5,1,0.5,0.1,0.05,0))
+
+dose_lev = as.character(c(0,0.05,0.1,0.5,1,2.5,5,10))
+cell_lev <- c("HT1376", "SW780","UBLC1", "BFTC905")
+
+wd <- '/Wet Lab/IncuCyte Results/Revisions_MMC/'
+sups <- '/Supplementary_Figures/Supplementary_Figure9-10_MutSigs/raw_images/MMC/'
+sup13_source <- '/Revision_1/Supplementary_Figures/Supplementary_Figure13_old10_MutSigs/source_data/'
+```
+
+import all phase confluence data
+```{r message=FALSE, warning=FALSE}
+n_rep <- 5
+
+# 6 technical replicate wells, of each dose
+mycol_1 <- paste0(rep(c("MMC_10", "MMC_5", "MMC_2.5", "MMC_1", "MMC_0.5", "MMC_0.1", "MMC_0.05", "MMC_0"), each=6), 
+       rep(c("_1", "_2","_3","_4","_5","_6"), 8)
+       )
+mycol_1 <- c("hr", mycol_1, "Cell_line", "bio_rep")
+# 5 technical replicate wells, of each dose
+mycol_2 <- paste0(rep(rev(c("MMC_10", "MMC_5", "MMC_2.5", "MMC_1", "MMC_0.5", "MMC_0.1", "MMC_0.05", "MMC_0")), each=5), 
+       rep(c("_1", "_2","_3","_4","_5"), 8)
+       )
+mycol_2 <- c("hr", mycol_2, "Cell_line", "bio_rep")
+
+mycol <- list(mycol_1, mycol_2, mycol_2, mycol_2, mycol_2)
+
+my_dir <- paste0('/Wet Lab/IncuCyte Results/Revisions_MMC/Rep',1:n_rep,"_data_SLS/")
+COI <- c("UBLC1", "BFTC905", "SW780", "HT1376")
+my_fl <- paste0(rep(COI, 3), "_MMC_confluence_rep", rep(1:n_rep, each=4), ".txt")
+my_fl <- split(my_fl, rep(1:n_rep, each = 4))
+
+
+for(i in 1:n_rep){
+  d <- my_dir[i]
+  f <- my_fl[[i]]
+  c <- mycol[[i]]
+  
+  end_col <- ifelse(i==1, 50, 42)
+  
+  #read in data for each cell line (per dose per tech rep)
+  for(j in 1:length(COI)){
+      assign(paste0(COI[j], "_df"), 
+             read_delim(paste0(d, f[j]), delim = "\t", escape_double = FALSE, trim_ws = TRUE, skip = 6)[,2:end_col] %>% 
+               mutate(Elapsed = as.numeric(Elapsed), Cell_line = COI[j], bio_rep = as.character(i)) %>%
+               `colnames<-`(c) %>%
+               pivot_longer(cols=starts_with("MMC"), names_to = "dose_rep", values_to = "PhaseConf") %>%
+              mutate(dose = as.character(ex_between(dose_rep, "MMC_","_")),
+                    rep = as.character(substr(dose_rep, nchar(dose_rep), nchar(dose_rep)))) %>%
+               select(Cell_line,bio_rep, hr, dose, rep, PhaseConf))
+  }
+  
+  assign(paste0("rep",i,"_df"), rbind(BFTC905_df, UBLC1_df, HT1376_df, SW780_df))
+}
+
+#combine the cell lines together
+df_all <- rbind(rep1_df, rep2_df, rep3_df, rep4_df, rep5_df)
+
+#normalize each well to its 0hr conf (allows better comparison across all wells)
+df_all <- df_all %>%
+  group_by(Cell_line, dose, rep, bio_rep)  %>%
+  mutate(conf_norm0 = PhaseConf / PhaseConf[hr == 0]) %>%
+  ungroup() %>%
+  mutate(dose = case_when(Cell_line=="SW780"&bio_rep=="1"&dose=="10"~"0", #doses for SW780 are mislabeled
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="5"~"0.05", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="2.5"~"0.1", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="1"~"0.5", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0.5"~"1", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0.1"~"2.5", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0.05"~"5", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0"~"10", 
+                          .default = dose))
+  
+#collapse each dose/hr by taking mean of tech replicates
+df_collapsed <- df_all %>%
+  group_by(Cell_line, hr, dose, bio_rep) %>%
+  summarise(Cell_line = unique(Cell_line), 
+            hr = unique(hr), 
+            dose = unique(dose), 
+            PhaseConf = mean(PhaseConf), 
+            conf_norm0 = mean(conf_norm0)) %>% ungroup()
+#filter out bad reps (BFTC905_rep1, all of rep2)
+df_collapsed_filtered <- df_collapsed %>%
+  filter(!(Cell_line =="BFTC905"&bio_rep=="1"), 
+         bio_rep!="2")
+
+#normalize each time point so that the highest conf is at 100 (allows better comparison across cell lines)
+df_collapsed <- df_collapsed %>%
+  group_by(Cell_line, hr, bio_rep) %>%
+  mutate(conf_0norm_100norm = conf_norm0 / max(conf_norm0), 
+         conf_100norm = PhaseConf / max(PhaseConf)) %>%
+  ungroup()
+df_collapsed_filtered <- df_collapsed_filtered %>%
+  group_by(Cell_line, hr, bio_rep) %>%
+  mutate(conf_0norm_100norm = conf_norm0 / max(conf_norm0), 
+         conf_100norm = PhaseConf / max(PhaseConf)) %>%
+  ungroup()
+
+#write.csv(df_collapsed, paste0(wd, "Rep1-4_PhaseConf_collapsed.csv"), row.names = F)
+
+rm(BFTC905_df, UBLC1_df, HT1376_df, SW780_df)
+```
+
+import all cytotox data
+```{r message=FALSE, warning=FALSE}
+count_fl <- paste0(rep(c("UBLC1", "BFTC905", "SW780", "HT1376"), 4), "_MMC_RedCount_rep", rep(1:n_rep, each=4), ".txt")
+count_fl <- split(count_fl, rep(1:n_rep, each = 4))
+
+for(i in 1:n_rep){
+  d <- my_dir[i]
+  f_count <- count_fl[[i]]
+  c <- mycol[[i]]
+  
+  end_col <- ifelse(i==1, 50, 42)
+  
+  #read in data for each cell line (per dose per tech rep)
+  for(j in 1:length(COI)){
+      assign(paste0(COI[j], "_redCount_df"), 
+             read_delim(paste0(d, f_count[j]), delim = "\t", escape_double = FALSE, trim_ws = TRUE, skip = 6)[,2:end_col] %>% 
+               mutate(Elapsed = as.numeric(Elapsed), Cell_line = COI[j], bio_rep = as.character(i)) %>%
+               `colnames<-`(c) %>%
+               pivot_longer(cols=starts_with("MMC"), names_to = "dose_rep", values_to = "RedCount") %>%
+              mutate(dose = as.character(ex_between(dose_rep, "MMC_","_")),
+                    rep = as.character(substr(dose_rep, nchar(dose_rep), nchar(dose_rep)))) %>%
+               select(Cell_line,bio_rep, hr, dose, rep, RedCount))
+    
+  }
+  
+  count_df <- rbind(BFTC905_redCount_df, UBLC1_redCount_df, HT1376_redCount_df, SW780_redCount_df)
+  
+  assign(paste0("rep",i,"_red"), count_df)
+}
+
+#combine the cell lines together
+red_all <- rbind(rep1_red, rep2_red, rep3_red, rep4_red, rep5_red) %>%
+  mutate(dose = case_when(Cell_line=="SW780"&bio_rep=="1"&dose=="10"~"0", #doses for SW780 are mislabeled
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="5"~"0.05", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="2.5"~"0.1", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="1"~"0.5", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0.5"~"1", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0.1"~"2.5", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0.05"~"5", 
+                          Cell_line=="SW780"&bio_rep=="1"&dose=="0"~"10", 
+                          .default = dose))
+
+#normalize to phase conf per well
+red_all <- red_all %>% left_join(df_all)  %>%
+  mutate(RedCount_PhaseConf = RedCount/PhaseConf, 
+         RedCount_normPhaseConf = RedCount / conf_norm0) 
+  
+#collapse each dose/hr by taking mean of tech replicates
+red_collapsed <- red_all %>%
+  group_by(Cell_line,bio_rep, hr, dose) %>%
+  summarise(Cell_line = unique(Cell_line), 
+            hr = unique(hr), 
+            dose = unique(dose), 
+            across(starts_with("Red"), 
+                   list(avg = ~mean(.x, na.rm=T),
+                        sem = ~sd(.x, na.rm=T)/sqrt(sum(!is.na(.x)))),
+                   .names = "{.col}_{.fn}")) %>% 
+  ungroup()
+
+#filter out BFTC905_rep1 + all of rep2
+red_collapsed_filtered <- red_collapsed %>%
+  filter(!(Cell_line =="BFTC905"&bio_rep=="1"),
+         bio_rep!="2")
+
+#clean environment
+rm(BFTC905_redCount_df, UBLC1_redCount_df, HT1376_redCount_df, SW780_redCount_df, count_df)
+rm( count_fl, my_fl, mycol, c, d, f, f_count, my_dir, mycol_1, mycol_2)
+```
+
+### GRAPH CONFLUENCE ###
+
+calculate IC50s - fit curves (for each cell line, bio rep @ 48 hr)
+```{r}
+combined_IC50 <- data.frame()
+hr_use <- 48
+table_x <- 0.05 
+table_y <- 0.1 
+
+
+for(i in c(1,3,4,5)){
+    df <- df_collapsed %>% filter(bio_rep==as.character(i), hr==hr_use) %>% mutate(dose = as.numeric(dose))
+    if(nrow(df)==0){next}
+    
+    fit_df <- drm(data = df,
+      formula = conf_0norm_100norm~dose,
+      curveid = Cell_line,
+      fct=LL.4(names=c("Hill Slope", "Min", "Max", "IC50")),
+      lowerl = c(NA,0,NA,NA))
+  
+    #make table of IC50s
+    IC_df <- tidy(fit_df) %>% filter(term =="IC50") %>% select(curve, estimate) %>% mutate(estimate=round(estimate,3)) %>% rename(Cell_line = curve, IC50 = estimate)
+    combined_IC50 <- combined_IC50 %>% bind_rows(IC_df %>% mutate(rep=i, hr=hr_use))
+    params <- tidy(fit_df) %>% filter(term != "Hill Slope") %>% select(term, curve, estimate, std.error, p.value)
+    
+    #get datapoints along fitted curves
+    fit_data <- data.frame(x_val = rep(seq(0,20,0.02), 8), 
+               Cell_line = rep(unique(df$Cell_line), each=length(seq(0,20,0.02)))
+               )
+    fit_data$predict_value <- predict(fit_df, newdata = fit_data)
+}
+
+
+```
+
+IC50 for 48hr - barplot, combined dose response
+```{r}
+hr_use <- 48
+
+filtered_IC50 <- combined_IC50 %>%
+  mutate(group = case_when(Cell_line %in% c("BFTC905", "UBLC1")~"FA_low", .default = "FA_high"),
+         group = factor(group, levels=c("FA_low", "FA_high")),
+         Cell_line = factor(Cell_line, levels=cell_lev)) %>%
+  filter(!(rep==1&Cell_line=="BFTC905"), hr==hr_use)
+write.csv(filtered_IC50, paste0(sup13_source, "S13F_rightBarplot_MMC_Confluence_IC50.csv"), row.names = F)
+
+#IC50 stats
+stat.test <- filtered_IC50 %>%
+    wilcox_test(IC50~group) %>%
+    add_xy_position()
+tpval <- filtered_IC50 %>%
+    t_test(IC50~group) %>%
+    pull(p)
+
+
+#IC50 barplot
+avg_sem <- filtered_IC50 %>%
+  group_by(group) %>%
+  summarise(avg = mean(IC50), 
+            sem = sd(IC50)/sqrt(n()), .groups = "drop")
+avg_sem %>%
+  mutate(group = factor(group, levels=c("FA_low", "FA_high"))) %>%
+  ggplot(aes(x=group, y=avg)) +
+    geom_bar(stat="identity", aes(fill=group)) +
+    geom_errorbar(aes(ymin=avg-sem, ymax=avg+sem), width=0.2) +
+    geom_quasirandom( data = filtered_IC50, aes(x=group, y=IC50, color=Cell_line), size=3, shape=16, inherit.aes = F) +
+    scale_color_manual(values=cell_cols) +
+    scale_fill_manual(values=cis_cols) +
+    #coord_cartesian(ylim=c(0,17)) +
+    #stat_pvalue_manual(stat.test, tip.length = 0) +
+    labs(title=paste0("Confluence IC50 at ",hr_use,"hrs"), color="Cell line", caption=paste0("wilcox p (t-test=", tpval,")"), y="IC50")
+ggsave(paste0(wd, "IC50_Confluence_DoseResponse_",hr_use,"hr_barplot.pdf"), width=4, height=4)
+ggsave(paste0(sups, "IC50_Confluence_DoseResponse_",hr_use,"hr_barplot_nostats.pdf"), width=3.3, height=4)
+
+#combine reps for dose response curve
+df <- df_collapsed %>% 
+  mutate(dose = as.numeric(dose)) %>%
+  filter(hr==hr_use, !(bio_rep==1&Cell_line=="BFTC905"), bio_rep!=2) %>%
+  group_by(Cell_line, dose) %>%
+  summarise(conf_0norm_100norm_avg = mean(conf_0norm_100norm), 
+            conf_0norm_100norm_sem = sd(conf_0norm_100norm)/sqrt(n()), .groups = "drop")
+write.csv(df, paste0(sup13_source, "S13F_left_MMC_Confluence_DoseResponse_48hr.csv"), row.names = F)
+
+df %>%
+  mutate(Cell_line = fct_relevel(Cell_line, c("SW780", "HT1376", "BFTC905", "UBLC1"))) %>%
+    ggplot(aes(x=dose+0.05, y=conf_0norm_100norm_avg, color=Cell_line)) +
+    geom_point() +
+    geom_line() +
+    geom_errorbar(aes(ymin=conf_0norm_100norm_avg-conf_0norm_100norm_sem, ymax=conf_0norm_100norm_avg+conf_0norm_100norm_sem), width=0.1) +
+    scale_color_manual(values=cell_cols) +
+    scale_x_continuous(transform = "log10", breaks=c(0,0.05,0.1,0.5,1,2.5,5,10)+0.05, labels=dose_lev) +
+    labs(title=paste0(hr_use,"hr reps combined"), x="uM MMC", y="Confluence (0hr norm, max=1)", subtitle="exclude rep2 + BFTC905_rep1") +
+    coord_cartesian(xlim=c(0.05,10.05), ylim=c(0,1)) +
+    theme(panel.grid.major = element_line(color="snow2"), panel.border = element_rect(color="black", fill=NA))
+ggsave(paste0(wd, "DoseResponse_CombinedReps_",hr_use,"hr.pdf"), width=5, height=4)
+ggsave(paste0(sups, "DoseResponse_CombinedReps_",hr_use,"hr.pdf"), width=4.3, height=4)
+```
+
+
+
+### GRAPH CYTOTOX ###
+
+calculate AUC at 72hr
+```{r}
+hr_use <- 72
+
+normMax <- red_collapsed_filtered %>%
+  mutate(dose = as.numeric(dose)) %>%
+  filter(hr==hr_use) %>%
+  group_by(bio_rep) %>% mutate(RedCount_PhaseConf_normMax = RedCount_PhaseConf_avg / max(RedCount_PhaseConf_avg)) %>% ungroup() 
+
+## Dose response curves (combined rep) ##
+normMax_combined <- normMax %>%
+  group_by(Cell_line, dose) %>%
+  summarise(normMax_avg = mean(RedCount_PhaseConf_normMax), 
+            normMax_sem = sd(RedCount_PhaseConf_normMax)/sqrt(n()), 
+            Red_avg = mean(RedCount_avg),
+            Red_sem = sd(RedCount_avg)/sqrt(n()), 
+            RPC_avg = mean(RedCount_PhaseConf_avg), 
+            RPC_sem = sd(RedCount_PhaseConf_avg)/sqrt(n()), .groups = "drop")
+normMax_combined_source <- normMax_combined %>%
+  select(Cell_line, dose, normMax_avg, normMax_sem) %>%
+  rename(Red_norm_avg = normMax_avg, Red_norm_sem = normMax_sem)
+write.csv(normMax_combined_source, paste0(sup13_source, "S13G_left_MMC_cytotox_doseResponse.csv"), row.names = F)
+
+normMax_combined %>%
+  ggplot(aes(x=dose+0.02, y=normMax_avg)) +
+    geom_errorbar(aes(color=Cell_line, ymin=normMax_avg-normMax_sem, ymax=normMax_avg+normMax_sem), width=0.05) +
+    geom_point(aes(color=Cell_line), size=2) +
+    geom_line(aes(color=Cell_line)) +
+    scale_color_manual(values=cell_cols) +
+    scale_x_continuous(transform = "log10", breaks=c(0,0.05, 0.1,0.5,1,2.5,5,10)+0.02, labels=c(0,0.05, 0.1,0.5,1,2.5,5,10)) +
+    labs(x="uM MMC", y="RedCount_PhaseConf_normMax", title = paste0("Cytotox at ",hr_use,"hrs")) +
+    theme(panel.grid.major = element_line(color="snow2"), panel.border = element_rect(color="black", fill=NA))
+ggsave(paste0(wd, "FILTEREDREP_RedCount_PhaseConf_normMax_DoseResponse_Curve_Combined_",hr_use,"hr.pdf"), width=4.5, height=4)
+ggsave(paste0(sups, "FILTEREDREP_RedCount_PhaseConf_normMax_DoseResponse_Curve_Combined_",hr_use,"hr.pdf"), width=4.5, height=4)
+
+
+## AUC ##
+df <- normMax %>%
+  group_by(Cell_line, bio_rep) %>%
+  summarise(RedCount_PhaseConf_AUC = auc(dose, RedCount_PhaseConf_avg), 
+            RedCount_PhaseConf_normMax_AUC = auc(dose, RedCount_PhaseConf_normMax),
+            RedCount_AUC = auc(dose, RedCount_avg)) %>% ungroup() %>%
+  mutate(Cell_line = factor(Cell_line, levels=cell_lev)) %>%
+  mutate(group = case_match(Cell_line, "HT1376"~"FA_high", "SW780"~"FA_high", "UBLC1"~"FA_low", "BFTC905"~"FA_low"))
+df_source <- df %>% select(Cell_line,group, bio_rep, RedCount_PhaseConf_normMax_AUC)
+write.csv(df_source, paste0(sup13_source, "S13G_rightBarplot_MMC_Cytotox_AUC.csv"), row.names = F)
+
+df_avg_sem <- df %>%
+  group_by(group) %>%
+  summarise(avg = mean(RedCount_PhaseConf_normMax_AUC), 
+            sem = sd(RedCount_PhaseConf_normMax_AUC)/ sqrt(n()), .groups = "drop")
+
+
+#RedCount_PhaseConf_normMax
+stat.test <- df %>%
+  t_test(RedCount_PhaseConf_normMax_AUC~group) %>%
+  add_xy_position()
+wp <- df %>%
+  wilcox_test(RedCount_PhaseConf_normMax_AUC~group) %>%
+  pull(p) %>% round(4)
+
+df_avg_sem %>%
+  mutate(group=factor(group, levels=c("FA_low", "FA_high"))) %>%
+  ggplot(aes(x=group, y=avg)) +
+    geom_bar(stat="identity", aes(fill=group), show.legend = F) +
+    geom_errorbar(aes(ymin=avg-sem, ymax=avg+sem), width=0.2) +
+    geom_quasirandom(data=df, inherit.aes = F, aes(x=group, y=RedCount_PhaseConf_normMax_AUC, color=Cell_line), size=3, shape=16) +
+    stat_pvalue_manual(stat.test, tip.length = 0) +
+    scale_fill_manual(values=cis_cols) +
+    scale_color_manual(values=cell_cols) +
+    coord_cartesian(ylim=c(0,8.5)) +
+    labs(title=paste0("Cytotox at ",hr_use,"hrs"), caption=paste0("t-test (wilcox=",wp,")"))
+ggsave(paste0(wd, "FILTEREDREP_RedCount_PhaseConf_normMax_AUC_",hr_use,"hr_barplot.pdf"), width=4, height=4)
+ggsave(paste0(sups, "FILTEREDREP_RedCount_PhaseConf_normMax_AUC_",hr_use,"hr_barplot.pdf"), width=3.2, height=4)
+
+
+```
