@@ -15,6 +15,11 @@ This directory contains custom scripts for analyzing metastatic seeding patterns
 This repository includes an example folder, `19-001/`, containing output files generated using the script `clone_tree_generation_for_machina_BLCA.R`.
 Input files and expected results are provided in the `19-001_input_example/` directory.
 
+##Downstream Analysis
+CT_ICI_Analysis.Rmd - for the ICI related analysis
+Metastatic_seeding_analysis.Rmd - for the survival analysis,  histological comparisions and primary vs metastases of patterns of seeding.
+Seeding_Mutations.Rmd - compare founder profiles of metastases that did vs didn’t seed additional metastases
+
 ### MACHINA Commands
 
 **pmh**
@@ -34,6 +39,7 @@ pmh_tr -p P001PriFFPE \
 **DOT to PDF Conversion**
 MACHINA generates migration tree visualizations as .dot files in the results/ directory. To convert these files into PDF format for easier viewing and sharing, use the following command:
 dot -Tpdf sampleName-S.dot -o sampleName-S.pdf
+
 
 
 
