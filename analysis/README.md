@@ -10,7 +10,7 @@ The repository is organized into different  folders, each corresponding to one o
 | `cfdna-nucleosome-profiling`     | Script to produce the heatmap for TFs from nucleosome profiling results| Figure 7 |
 | `comut_mutations_cna_sv/`| Landscape plot for muttaions, CNAs and SVs. | Figure 3 |
 | `copy-number-tumors/`    | Copy number alterations and founder, shared, and private clonality statys  | Figure 3 |
-| `experimental_analysis/`      | Fanconi Anemia pathway analysis and experimental vadliation and assays | Figure 3 |
+| `experimental_analysis/`      | Fanconi Anemia pathway analysis and experimental vadliation and assays | Figure 4 |
 | `metastatic-seeding/`      | Metastatic seeding runs from MACHINA and downstream analysis | Figures 1 and 2 |
 | `mutational-signatures/`      | Mutational signatures analysis and clonality | Figure 4 |
 | `pathogenic_alteration_analysis/`      | Analysis for combining different alteration types such as mutations, CNAs and svs | Figure 3 |
