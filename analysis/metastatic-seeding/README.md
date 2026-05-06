@@ -16,9 +16,9 @@ This repository includes an example folder, `19-001/`, containing output files g
 Input files and expected results are provided in the `19-001_input_example/` directory.
 
 ## Downstream Analysis
-CT_ICI_Analysis.Rmd - for the ICI related analysis
-Metastatic_seeding_analysis.Rmd - for the survival analysis,  histological comparisions and primary vs metastases of patterns of seeding.
-Seeding_Mutations.Rmd - compare founder profiles of metastases that did vs didn’t seed additional metastases
+- CT_ICI_Analysis.Rmd - for the ICI related analysis
+- Metastatic_seeding_analysis.Rmd - for the survival analysis,  histological comparisions and primary vs metastases of patterns of seeding.
+- Seeding_Mutations.Rmd - compare founder profiles of metastases that did vs didn’t seed additional metastases
 
 ### MACHINA Commands
 
