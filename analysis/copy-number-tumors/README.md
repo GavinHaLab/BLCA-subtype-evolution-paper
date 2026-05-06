@@ -5,6 +5,7 @@ This repository contains scripts for generating the CNA matrix from a copy numbe
 - **`makeMatrixFromTITAN-ICHOR_segBased_git.R`** –R script to generate a matrix for copy number profiles.
 
 - **`CNA_analysis.Rmd** – CNA analysis and Supplementary Fig. 4 CNA related analysis, processing, cleaning and visualization script.
+-  **`bafplots_3_colord_Ideo.py** – CNA analysis and Supplementary Fig. 6 for LOH analysis and BAF plost generation. Used the cytoband from the data folder. 
 
   ## Usage
 1.  Rscript makeMatrixFromTITAN-ICHOR_segBased_hg38.R /path/to/TitanSegFiles/ GRCh38.p12.ensembl.gene.annotations.sorted.include.AREnhancer.txt sampleList.txt common Gene 1000 output_directory.
