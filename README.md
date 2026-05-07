@@ -11,7 +11,7 @@ This repository contains code, data, and results associated with a manuscript in
 
 **<u>The evolution and heterogeneity of lethal metastatic bladder cancer subtypes</u>**
 
-Pushpa Itagi1*, Samantha L. Schuster*, Sonali Arora, Thomas W. Persse, Jennifer A. Waters, Michael Yang, Alan Min, Pooja Chandra, Mohamed Adil1, Patricia C. Galipeau1, Dmytro Rudoy, Allie S. Kreitman, Yixin Lin, Minjeong Ko, Erolcan Sayar, Robert D. Patton, Lori Kollath, Abby Meis, Samuel Lindergren, Nathan Ji, Khursheed Ali, Hrishi Venkatesh, A. Patrick McDeed, Claire B. Mills, Manasvita Vashisth, Cynthia L. Wladyka, Rosa Nadal, Jessica Hawley, Todd Yezefski, Sarah P. Psutka, John L. Gore, Daniel W. Lin1, Peter S. Nelson, Heather H. Cheng, Michael T. Schweizer, Lawrence Fong6, John K. Lee, Evan Yu, Eva Corey, Colm Morrissey, Petros Grivas, Robert B. Montgomery, Jonathan L. Wright, Michael C. Haffner, Funda Vakar-Lopez, Omar Y. Mian†, Hung-Ming Lam†, Andrew C. Hsieh†, Gavin Ha†
+Pushpa Itagi*, Samantha L. Schuster*, Sonali Arora, Thomas W. Persse, Jennifer A. Waters, Michael Yang, Alan Min, Pooja Chandra, Mohamed Adil1, Patricia C. Galipeau1, Dmytro Rudoy, Allie S. Kreitman, Yixin Lin, Minjeong Ko, Erolcan Sayar, Robert D. Patton, Lori Kollath, Abby Meis, Samuel Lindergren, Nathan Ji, Khursheed Ali, Hrishi Venkatesh, A. Patrick McDeed, Claire B. Mills, Manasvita Vashisth, Cynthia L. Wladyka, Rosa Nadal, Jessica Hawley, Todd Yezefski, Sarah P. Psutka, John L. Gore, Daniel W. Lin1, Peter S. Nelson, Heather H. Cheng, Michael T. Schweizer, Lawrence Fong6, John K. Lee, Evan Yu, Eva Corey, Colm Morrissey, Petros Grivas, Robert B. Montgomery, Jonathan L. Wright, Michael C. Haffner, Funda Vakar-Lopez, Omar Y. Mian†, Hung-Ming Lam†, Andrew C. Hsieh†, Gavin Ha†
 ###
 
 
