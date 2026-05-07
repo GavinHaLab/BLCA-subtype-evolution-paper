@@ -5,7 +5,7 @@ This repository contains scripts for generating the CNA matrix from a copy numbe
 - **`makeMatrixFromTITAN-ICHOR_segBased_git.R`** –R script to generate a matrix for copy number profiles.
 
 - **CNA_analysis.Rmd** – CNA analysis and Supplementary Fig. 4 CNA related analysis, processing, cleaning and visualization script.
--  **bafplots_colored_Ideo.py** – CNA analysis and Supplementary Fig. 6 for LOH analysis and BAF plost generation. Used the cytoband from the data folder. 
+-  **bafplots_colored_Ideo.py** – CNA analysis and Supplementary Fig. 6 for LOH analysis and BAF plost generation. Used the cytoband from the data folder. The LOH status is defined as follows: if the minor copy number is 0 and the TITAN copy number caller classifies the event as a homozygous deletion (HOMD), the status is considered LOH. All other states are considered heterozygous (HET).
 
   ## Usage
 1.  Rscript makeMatrixFromTITAN-ICHOR_segBased_hg38.R /path/to/TitanSegFiles/ GRCh38.p12.ensembl.gene.annotations.sorted.include.AREnhancer.txt sampleList.txt common Gene 1000 output_directory.
