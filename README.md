@@ -21,9 +21,8 @@ Pushpa Itagi1*, Samantha L. Schuster*, Sonali Arora, Thomas W. Persse, Jennifer 
 ## 📁 Repository Structure
 
 ```bash
-├── analysis/            # The scripts are grouped based on the analysis type.
+├── analysis/            # Analysis and visualization code for all downstream analysis. Each type if analysis has its own folder with a name that describes the analysis. 
 ├── data/                # Raw and processed sequencing data includes source data files.
-├── scripts/             # Analysis and visualization code for all downstream analysis. Each type if analysis has its own folder with a name that describes the analysis. 
 ├── results/             # Output figures and tables. Along with the source data files used to generate figures in main figures.
 ├── pipelines/           # Used to share pipelines used for the project such as mutation callers and a shell scripts if a custom pipleline was utilized. 
 ├── LICENSE
